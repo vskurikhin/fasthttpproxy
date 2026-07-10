@@ -18,7 +18,7 @@
 
 ## Репозиторий
 
-[fasthttp](https://github.com/valyala/fasthttp) — быстрая HTTP-реализация для Go. Единственный Go-модуль: `github.com/valyala/fasthttp` (Go 1.25+).
+[fasthttpproxy](https://github.com/vskurikhin/fasthttpproxy) — быстрая Proxy-HTTP-реализация для Go. Единственный Go-модуль основан на: `github.com/valyala/fasthttp` (Go 1.25+).
 
 ---
 
