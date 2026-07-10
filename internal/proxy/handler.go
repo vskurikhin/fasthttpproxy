@@ -6,16 +6,22 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/url"
 	"time"
 
 	"github.com/valyala/fasthttp"
 	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
 	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 	"github.com/vskurikhin/fasthttpproxy/internal/readers"
+	"github.com/vskurikhin/fasthttpproxy/internal/upstream"
 )
 
+var upstreamsObj = upstream.NewUpstreams(nil)
+
 // Handler возвращает fasthttp.RequestHandler, реализующий стриминговый прокси.
-func Handler() fasthttp.RequestHandler {
+// upstreams — список upstream-серверов (host:port); если пуст, используется Host из запроса.
+func Handler(upstreams []string) fasthttp.RequestHandler {
+	upstreamsObj = upstream.NewUpstreams(upstreams)
 	return func(ctx *fasthttp.RequestCtx) {
 		h := &handler{ctx: ctx}
 		h.handle()
@@ -61,29 +67,40 @@ func (h *handler) handle() {
 	}
 
 	if !h.writeRequestHeaders() {
-		pool.Put(h.upstreamAddress, h.connection)
+		pool.CloseAndDrop(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.writeRequestBody() {
-		pool.Put(h.upstreamAddress, h.connection)
+		pool.CloseAndDrop(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.readResponseHeaders() {
-		pool.Put(h.upstreamAddress, h.connection)
+		pool.CloseAndDrop(h.upstreamAddress, h.connection)
 		return
 	}
 	h.copyResponseStatus()
 	h.streamResponseBody()
 }
 
-// resolveUpstream извлекает адрес upstream из Host заголовка запроса.
-// При отсутствии Host возвращает 400 и завершает обработку.
+// resolveUpstream определяет адрес upstream.
+// Если задан список upstream-серверов, выбирает случайный; иначе использует Host из запроса.
 func (h *handler) resolveUpstream() bool {
+	if addr, ok := upstreamsObj.Random(); ok {
+		h.upstreamAddress = addr
+		return true
+	}
+
 	h.upstreamAddress = string(h.ctx.Host())
 	if h.upstreamAddress == "" {
+		log.Printf("no upstream address")
 		h.ctx.Error("no host header", fasthttp.StatusBadRequest)
 		return false
 	}
+	_, err := url.Parse(h.upstreamAddress)
+	if err != nil {
+		h.ctx.Error("invalid upstream address", fasthttp.StatusBadRequest)
+	}
+	upstreamsObj.Append(h.upstreamAddress)
 	return true
 }
 
@@ -92,7 +109,10 @@ func (h *handler) resolveUpstream() bool {
 func (h *handler) acquireUpstreamConn() bool {
 	var err error
 	h.connection, err = pool.Get(h.upstreamAddress)
+	log.Printf("acquired connection: %v for upstream address: %s", h.connection, h.upstreamAddress)
 	if err != nil {
+		metrics.DialErrors.Inc()
+		log.Printf("failed to acquire upstream connection: %s", err)
 		h.ctx.Error("cannot connect to upstream", fasthttp.StatusBadGateway)
 		return false
 	}
@@ -106,11 +126,13 @@ func (h *handler) writeRequestHeaders() bool {
 
 	if err := h.request.Header.Write(bw); err != nil {
 		metrics.WriteErrors.Inc()
+		log.Printf("failed to write request headers: %s", err)
 		h.ctx.Error("upstream request header error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
 	}
 	if err := bw.Flush(); err != nil {
 		metrics.BufIOWriterFlushErrors.Inc()
+		log.Printf("upstream request header flush error: %s", err)
 		h.ctx.Error("upstream request flush error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
 	}
@@ -128,6 +150,7 @@ func (h *handler) writeRequestBody() bool {
 
 	if h.ctx.Request.IsBodyStream() {
 		if err := PipeCopy(h.ctx.Request.BodyStream(), h.connection); err != nil {
+			log.Printf("failed to write request body: %s", err)
 			h.ctx.Error("upstream request body stream error: "+err.Error(), fasthttp.StatusBadGateway)
 			return false
 		}
@@ -142,11 +165,13 @@ func (h *handler) writeRequestBody() bool {
 	n, err := h.connection.Write(body)
 	if err != nil {
 		metrics.WriteErrors.Inc()
+		log.Printf("failed to write request body: %s", err)
 		h.ctx.Error("upstream request body write error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
 	}
 	if n != len(body) {
 		metrics.WriteErrors.Inc()
+		log.Printf("failed to write request body: wrote %d of %d bytes", n, len(body))
 		h.ctx.Error("upstream request body short write", fasthttp.StatusBadGateway)
 		return false
 	}
@@ -161,6 +186,7 @@ func (h *handler) readResponseHeaders() bool {
 	h.responseHeader = &fasthttp.ResponseHeader{}
 	if err := h.responseHeader.Read(h.bufIOReader); err != nil {
 		metrics.ReadErrors.Inc()
+		log.Printf("upstream response header read error: %s", err)
 		h.ctx.Error("upstream response error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
 	}
@@ -185,19 +211,18 @@ func (h *handler) copyResponseStatus() {
 }
 
 // streamResponseBody устанавливает стрим-тело ответа клиенту.
-// Для фиксированного Content-Length использует LimitedReader,
-// для chunked/identity — прямой стрим из буферизованного читателя.
+// Для фиксированного Content-Length ограничивает чтение через PoolReader.remain,
+// для chunked/identity — прямой стрим до EOF (соединение закрывается).
 func (h *handler) streamResponseBody() {
 	h.ctx.Response.ImmediateHeaderFlush = true
 
 	contentLen := h.responseHeader.ContentLength()
-	tr := readers.NewTimedReader(h.bufIOReader)
-	pr := readers.NewPoolReader(tr, h.upstreamAddress, h.connection)
-	if contentLen >= 0 {
-		h.ctx.SetBodyStream(io.LimitReader(pr, int64(contentLen)), contentLen)
-	} else {
-		h.ctx.SetBodyStream(pr, -1)
-	}
+	tr := readers.NewTimedReader(h.bufIOReader, h.connection)
+	// Передаём contentLen как remain:
+	//   contentLen >= 0 — PoolReader вернёт соединение в пул после чтения.
+	//   contentLen < 0  — PoolReader закроет соединение при EOF.
+	pr := readers.NewPoolReader(tr, h.upstreamAddress, h.connection, int64(contentLen))
+	h.ctx.SetBodyStream(pr, contentLen)
 }
 
 // PipeCopy копирует данные из src в dst, используя буфер 64KB.
