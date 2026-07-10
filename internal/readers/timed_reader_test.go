@@ -33,7 +33,7 @@ func (m *mockReader) Read(p []byte) (int, error) {
 
 func TestTimedReaderReadsFull(t *testing.T) {
 	input := "hello world"
-	tr := NewTimedReader(strings.NewReader(input))
+	tr := NewTimedReader(strings.NewReader(input), nil)
 
 	buf := make([]byte, 64)
 	n, err := tr.Read(buf)
@@ -54,7 +54,7 @@ func TestTimedReaderReadsFull(t *testing.T) {
 }
 
 func TestTimedReaderPartialRead(t *testing.T) {
-	tr := NewTimedReader(strings.NewReader("hello"))
+	tr := NewTimedReader(strings.NewReader("hello"), nil)
 
 	buf := make([]byte, 2)
 	n, err := tr.Read(buf)
@@ -76,7 +76,7 @@ func TestTimedReaderPartialRead(t *testing.T) {
 
 func TestTimedReaderError(t *testing.T) {
 	expectedErr := errors.New("read error")
-	tr := NewTimedReader(&mockReader{err: expectedErr})
+	tr := NewTimedReader(&mockReader{err: expectedErr}, nil)
 
 	buf := make([]byte, 64)
 	n, err := tr.Read(buf)
@@ -92,7 +92,7 @@ func TestTimedReaderRecordsDuration(t *testing.T) {
 	tr := NewTimedReader(&mockReader{
 		data:  []byte("hello"),
 		delay: 10 * time.Millisecond,
-	})
+	}, nil)
 
 	buf := make([]byte, 64)
 	n, err := tr.Read(buf)
@@ -113,7 +113,7 @@ func TestTimedReaderRecordsDuration(t *testing.T) {
 }
 
 func TestTimedReaderEmptyReader(t *testing.T) {
-	tr := NewTimedReader(strings.NewReader(""))
+	tr := NewTimedReader(strings.NewReader(""), nil)
 
 	buf := make([]byte, 64)
 	n, err := tr.Read(buf)

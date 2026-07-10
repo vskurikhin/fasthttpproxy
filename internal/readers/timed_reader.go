@@ -2,6 +2,8 @@ package readers
 
 import (
 	"io"
+	"log"
+	"net"
 	"time"
 
 	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
@@ -9,14 +11,16 @@ import (
 
 // TimedReader оборачивает io.Reader и записывает время от первого Read до EOF в гистограмму.
 type TimedReader struct {
-	reader  io.Reader
-	started bool
-	start   time.Time
+	connection net.Conn
+	reader     io.Reader
+	size       int64
+	started    bool
+	start      time.Time
 }
 
 // NewTimedReader создаёт TimedReader, оборачивающий заданный io.Reader.
-func NewTimedReader(r io.Reader) *TimedReader {
-	return &TimedReader{reader: r}
+func NewTimedReader(r io.Reader, connection net.Conn) *TimedReader {
+	return &TimedReader{connection: connection, reader: r}
 }
 
 func (tr *TimedReader) Read(p []byte) (int, error) {
@@ -26,8 +30,11 @@ func (tr *TimedReader) Read(p []byte) (int, error) {
 	}
 
 	n, err := tr.reader.Read(p)
+	tr.size += int64(n)
 	if err == io.EOF || (n > 0 && err != nil) {
-		metrics.ResponseBodyReadDuration.Observe(time.Since(tr.start).Seconds())
+		since := time.Since(tr.start)
+		metrics.ResponseBodyReadDuration.Observe(since.Seconds())
+		log.Printf("connection: %v, size: %d, timed reader finished in %s", tr.connection, tr.size, since)
 	}
 	return n, err
 }
