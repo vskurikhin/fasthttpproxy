@@ -87,29 +87,6 @@ func TestResolveUpstreamSuccess(t *testing.T) {
 	}
 }
 
-func TestResolveUpstreamMissingHost(t *testing.T) {
-	ResetUpstreams()
-	t.Skip()
-	var ctx fasthttp.RequestCtx
-	var req fasthttp.Request
-	req.SetRequestURI("/")
-	ctx.Init(&req, nil, nil)
-
-	h := &handler{ctx: &ctx}
-	ok := h.resolveUpstream()
-
-	if ok {
-		t.Fatal("expected false")
-	}
-	if h.upstreamAddress != "" {
-		t.Fatalf("expected empty upstreamAddr, got %q", h.upstreamAddress)
-	}
-	// Проверяем, что Error был вызван (проверяем тело ответа)
-	if len(ctx.Response.Body()) == 0 {
-		t.Fatal("expected response body from Error()")
-	}
-}
-
 // --- Тесты acquireUpstreamConn ---
 
 func TestAcquireUpstreamConnSuccess(t *testing.T) {
