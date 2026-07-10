@@ -60,15 +60,15 @@
 
 ## Сводка
 
-| Файл                           | Статус    | Строк |
-|--------------------------------|-----------|------:|
-| `cmd/proxy/main.go`            | изменён   |  24   |
-| `go.mod`                       | изменён   |   1   |
-| `internal/pool/dial.go`        | + новый   |  33   |
-| `internal/pool/pool.go`        | изменён   |  23→6 |
-| `internal/proxy/proxy.go`      | изменён   | 190   |
-| `internal/proxy/proxy_test.go` | изменён   | 906   |
-| `internal/readers/timed_reader.go`      | + новый | 33 |
-| `internal/readers/timed_reader_test.go` | + новый | 126 |
-| `internal/readers/pool_reader.go`       | + новый | 34 |
-| `internal/readers/pool_reader_test.go`  | + новый | 99 |
+| Файл                                    | Статус    | Строк |
+|-----------------------------------------|-----------|------:|
+| `cmd/proxy/main.go`                     | изменён   |    24 |
+| `go.mod`                                | изменён   |     1 |
+| `internal/pool/dial.go`                 | + новый   |    33 |
+| `internal/pool/pool.go`                 | изменён   |  23→6 |
+| `internal/proxy/proxy.go`               | изменён   |   190 |
+| `internal/proxy/proxy_test.go`          | изменён   |   906 |
+| `internal/readers/timed_reader.go`      | + новый   |    33 |
+| `internal/readers/timed_reader_test.go` | + новый   |   126 |
+| `internal/readers/pool_reader.go`       | + новый   |    34 |
+| `internal/readers/pool_reader_test.go`  | + новый   |    99 |

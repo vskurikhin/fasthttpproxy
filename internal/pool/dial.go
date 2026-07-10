@@ -8,7 +8,7 @@ import (
 	"github.com/valyala/fasthttp/fasthttpproxy"
 )
 
-// customDial — не глобальная диал-функция, устанавливаемая через SetDial.
+// customDial — не глобальная диал-функция, устанавливаемая через HTTPDialerTimeout.
 // Если nil, используется fasthttp.Dial.
 var customDial func(addr string) (net.Conn, error)
 
@@ -17,9 +17,9 @@ var customDial func(addr string) (net.Conn, error)
 //
 // Пример:
 //
-//	pool.SetDial(fasthttpproxy.FasthttpHTTPDialerDualStackTimeout("", 30*time.Second))
+//	pool.HTTPDialerTimeout(30 * time.Second)
 //
-// Если dial равен nil, пул возвращается к fasthttp.Dial.
+// Сохраняет переданный timeout в dialTimeout для тестирования.
 func HTTPDialerTimeout(timeout time.Duration) {
 	customDial = fasthttpproxy.FasthttpHTTPDialerDualStackTimeout("", timeout)
 }

@@ -11,7 +11,7 @@ import (
 //
 // Поведение зависит от параметра remain:
 //   - remain >= 0 (Content-Length): после чтения ровно remain байт
-//     соединение возвращается в пул (pool.Put). Соединение считается живым.
+//     соединение возвращается в пул (pool.ReleaseUpstreamConnection). Соединение считается живым.
 //   - remain < 0 (chunked/identity): при EOF соединение закрывается,
 //     так как upstream явно закрыл сокет.
 type PoolReader struct {
@@ -64,13 +64,13 @@ func (pr *PoolReader) readWithLimit(p []byte) (int, error) {
 	// Достигли лимита — возвращаем соединение в пул
 	if pr.remain <= 0 && !pr.returned {
 		pr.returned = true
-		pool.Put(pr.upstreamAddr, pr.connection)
+		pool.ReleaseUpstreamConnection(pr.upstreamAddr, pr.connection)
 	}
 
 	// Ошибка до достижения лимита — всё равно возвращаем (коннект мог умереть)
 	if err != nil && !pr.returned {
 		pr.returned = true
-		pool.Put(pr.upstreamAddr, pr.connection)
+		pool.ReleaseUpstreamConnection(pr.upstreamAddr, pr.connection)
 	}
 
 	// Если лимит исчерпан и нет ошибки — ведём себя как io.LimitReader:
@@ -88,7 +88,7 @@ func (pr *PoolReader) readUntilEOF(p []byte) (int, error) {
 	// Исключение: nil-ошибка без EOF — соединение ещё живо, продолжаем.
 	if !pr.returned && err != nil {
 		pr.returned = true
-		pool.CloseAndDrop(pr.upstreamAddr, pr.connection)
+		pool.CloseAndDropUpstreamConnection(pr.upstreamAddr, pr.connection)
 	}
 
 	return n, err

@@ -10,11 +10,7 @@ import (
 	"time"
 
 	"github.com/valyala/fasthttp"
-	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
 )
-
-// upstreamPool хранит пул соединений для каждого upstream-адреса.
-var upstreamPool sync.Map // addr -> *connPool
 
 type idleConn struct {
 	conn       net.Conn
@@ -27,93 +23,66 @@ type connPool struct {
 	count int32
 }
 
-const maxUpstreamConnsPerHost = 100
+// maxUpstreamConnectionsPerHost — максимальное количество соединений к одному upstream.
+// Значение по умолчанию — 100. Может быть изменено через MaxConnectionsPerHost.
+//
+// Изменять значение рекомендуется до запуска сервера, поскольку connPool-ы
+// создаются лениво при первом вызове AcquireUpstreamConnection для каждого адреса. Уже существующие
+// пулы используют старое значение до перезагрузки приложения.
+//
+// Минимальное значение — 1. При попытке установить меньше 1 функция
+// MaxConnectionsPerHost игнорирует значение и логирует предупреждение.
+var maxUpstreamConnectionsPerHost = 100
+
+// MaxConnectionsPerHost устанавливает максимальное количество соединений на один
+// upstream-адрес. По умолчанию — 100. Минимальное допустимое значение — 1.
+//
+// Значение должно быть установлено до вызова AcquireUpstreamConnection для любого адреса, иначе
+// существующие connPool-ы продолжат использовать предыдущее значение.
+//
+// Пример:
+//
+//	pool.MaxConnectionsPerHost(200)
+//
+// Если переданное значение меньше 1, функция логирует предупреждение и
+// сохраняет текущее значение без изменений.
+func MaxConnectionsPerHost(n int) {
+	if n < 1 {
+		log.Printf("pool: invalid maxConnectionsPerHost=%d, minimum is 1", n)
+		return
+	}
+	maxUpstreamConnectionsPerHost = n
+}
 
 // idleTimeout — максимальное время бездействия соединения в пуле.
 // Если соединение простаивает дольше, оно считается мёртвым и отбрасывается.
 // Значение 45 секунд выбрано как компромисс: меньше типичного keepalive timeout
 // upstream-серверов (60-120 с), чтобы избежать записи в закрытый сокет.
+// Может быть изменено через IdleTimeout. Минимальное значение — 1 секунда.
 var idleTimeout = 45 * time.Second
 
-// Get возвращает соединение к upstream из пула или создаёт новое.
-// Соединения, пробывшие в пуле дольше idleTimeout, отбрасываются.
-func Get(addr string) (net.Conn, error) {
-	v, _ := upstreamPool.LoadOrStore(addr, &connPool{})
-	cp := v.(*connPool)
-
-	cp.mu.Lock()
-	if n := len(cp.free); n > 0 {
-		last := cp.free[n-1]
-		cp.free = cp.free[:n-1]
-		cp.mu.Unlock()
-
-		// Проверяем, не простаивало ли соединение слишком долго.
-		if time.Since(last.returnedAt) > idleTimeout {
-			metrics.IdleDropErrors.Inc()
-			log.Printf("pool: dropping idle connection to %s (idle %v > %v)",
-				addr, time.Since(last.returnedAt), idleTimeout)
-			// Закрываем и декрементим count, как CloseAndDrop.
-			if err := last.conn.Close(); err != nil {
-				metrics.CloseErrors.Inc()
-				log.Printf("pool: close error for %s: %v", addr, err)
-			}
-			atomic.AddInt32(&cp.count, -1)
-			// Идём на создание нового соединения.
-			return cp.dialNew(addr)
-		}
-
-		return last.conn, nil
-	}
-	cp.mu.Unlock()
-
-	return cp.dialNew(addr)
-}
-
-// Put возвращает соединение обратно в пул для повторного использования.
-// Если пул переполнен, соединение закрывается и count декрементится.
-func Put(addr string, conn net.Conn) {
-	v, _ := upstreamPool.LoadOrStore(addr, &connPool{})
-	cp := v.(*connPool)
-
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-
-	if len(cp.free) >= maxUpstreamConnsPerHost {
-		// Пул переполнен — закрываем коннект и уменьшаем счётчик.
-		atomic.AddInt32(&cp.count, -1)
-		if err := conn.Close(); err != nil {
-			metrics.CloseErrors.Inc()
-			log.Printf("pool: close error for %s: %v", addr, err)
-		}
+// IdleTimeout устанавливает максимальное время бездействия соединения в пуле.
+// Соединения, пробывшие в пуле дольше этого времени, отбрасываются при извлечении.
+// По умолчанию — 45 секунд. Минимальное допустимое значение — 1 секунда.
+//
+// Пример:
+//
+//	pool.IdleTimeout(60 * time.Second)
+//
+// Если переданное значение меньше 1 секунды, функция логирует предупреждение
+// и сохраняет текущее значение без изменений.
+func IdleTimeout(d time.Duration) {
+	if d < time.Second {
+		log.Printf("pool: invalid idleTimeout=%v, minimum is 1s", d)
 		return
 	}
-	cp.free = append(cp.free, idleConn{
-		conn:       conn,
-		returnedAt: time.Now(),
-	})
-}
-
-// CloseAndDrop закрывает соединение и декрементит count.
-// Используется, когда коннект гарантированно мёртв (broken pipe, EOF на upstream).
-func CloseAndDrop(addr string, conn net.Conn) {
-	defer func() {
-		if err := conn.Close(); err != nil {
-			metrics.CloseErrors.Inc()
-			log.Printf("pool: close error for %s: %v", addr, err)
-		}
-	}()
-	v, _ := upstreamPool.LoadOrStore(addr, &connPool{})
-	cp := v.(*connPool)
-
-	cp.mu.Lock()
-	defer cp.mu.Unlock()
-	atomic.AddInt32(&cp.count, -1)
+	idleTimeout = d
 }
 
 // dialNew создаёт новое соединение к addr.
 // Без блокировки cp.mu — вызывающий должен гарантировать, что count уже проверен.
 func (cp *connPool) dialNew(addr string) (net.Conn, error) {
-	if atomic.LoadInt32(&cp.count) >= maxUpstreamConnsPerHost {
+	if atomic.LoadInt32(&cp.count) >= int32(maxUpstreamConnectionsPerHost) {
 		return nil, fasthttp.ErrDialTimeout
 	}
 

@@ -42,15 +42,15 @@ streamingProxyHandler (было 80 строк) декомпозирована н
 
 | Метод                  | Строки | Ответственность                         |
 |------------------------|:------:|-----------------------------------------|
-| resolveUpstream        |   7    | Извлечение адреса из Host               |
-| acquireUpstreamConn    |   8    | Получение соединения из пула            |
-| writeRequestHeaders    |  14    | Запись + flush заголовков               |
-| writeRequestBody       |  26    | Запись тела (stream/fixed)              |
-| readResponseHeaders    |  11    | Чтение заголовков ответа                |
-| copyResponseStatus     |   9    | Копирование статуса/заголовков          |
-| streamResponseBody     |   9    | Установка стрим-тела                    |
+| resolveUpstream        |  19    | Извлечение адреса из Host               |
+| acquireUpstreamConn    |  12    | Получение соединения из пула            |
+| writeRequestHeaders    |  17    | Запись + flush заголовков               |
+| writeRequestBody       |  35    | Запись тела (stream/fixed)              |
+| readResponseHeaders    |  12    | Чтение заголовков ответа                |
+| copyResponseStatus     |  14    | Копирование статуса/заголовков          |
+| streamResponseBody     |  11    | Установка стрим-тела                    |
 
-Оркестратор handle() — 14 строк.
+Оркестратор handle() — 28 строк.
 */
 
 func (h *handler) handle() {
@@ -67,15 +67,15 @@ func (h *handler) handle() {
 	}
 
 	if !h.writeRequestHeaders() {
-		pool.CloseAndDrop(h.upstreamAddress, h.connection)
+		pool.CloseAndDropUpstreamConnection(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.writeRequestBody() {
-		pool.CloseAndDrop(h.upstreamAddress, h.connection)
+		pool.CloseAndDropUpstreamConnection(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.readResponseHeaders() {
-		pool.CloseAndDrop(h.upstreamAddress, h.connection)
+		pool.CloseAndDropUpstreamConnection(h.upstreamAddress, h.connection)
 		return
 	}
 	h.copyResponseStatus()
@@ -108,7 +108,7 @@ func (h *handler) resolveUpstream() bool {
 // При ошибке возвращает 502 и завершает обработку.
 func (h *handler) acquireUpstreamConn() bool {
 	var err error
-	h.connection, err = pool.Get(h.upstreamAddress)
+	h.connection, err = pool.AcquireUpstreamConnection(h.upstreamAddress)
 	log.Printf("acquired connection: %v for upstream address: %s", h.connection, h.upstreamAddress)
 	if err != nil {
 		metrics.DialErrors.Inc()

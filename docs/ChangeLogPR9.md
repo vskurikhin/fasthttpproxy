@@ -134,20 +134,20 @@
 
 ## Сводка
 
-| Файл                                   | Статус    | Строк |
-|----------------------------------------|-----------|------:|
-| `cmd/proxy/main.go`                    | изменён   |  56   |
-| `cmd/proxy/main_test.go`               | + новый   |  76   |
-| `internal/config/config.go`            | + новый   |  46   |
-| `internal/config/config_test.go`       | + новый   | 129   |
-| `internal/metrics/metrics.go`          | изменён   |  46→62|
-| `internal/pool/pool.go`                | изменён   |  50→84|
-| `internal/pool/pool_test.go`           | изменён   | 147→400|
-| `internal/proxy/handler.go`            | переименован| 237→245|
-| `internal/proxy/handler_test.go`       | переименован| 906→1050|
-| `internal/readers/pool_reader.go`      | изменён   |  34→89 |
-| `internal/readers/pool_reader_test.go` | изменён   |  99→280|
-| `internal/readers/timed_reader.go`     | изменён   |  33→37 |
-| `internal/readers/timed_reader_test.go`| изменён   | 126→126|
-| `internal/upstream/upstream.go`        | + новый   |  41   |
-| `internal/upstream/upstream_test.go`   | + новый   | 130   |
+| Файл                                   | Статус        |     Строк |
+|----------------------------------------|---------------|----------:|
+| `cmd/proxy/main.go`                    | изменён       |        56 |
+| `cmd/proxy/main_test.go`               | + новый       |        76 |
+| `internal/config/config.go`            | + новый       |        46 |
+| `internal/config/config_test.go`       | + новый       |       129 |
+| `internal/metrics/metrics.go`          | изменён       |     46→62 |
+| `internal/pool/pool.go`                | изменён       |     50→84 |
+| `internal/pool/pool_test.go`           | изменён       |   147→400 |
+| `internal/proxy/handler.go`            | переименован  |   237→245 |
+| `internal/proxy/handler_test.go`       | переименован  |  906→1050 |
+| `internal/readers/pool_reader.go`      | изменён       |     34→89 |
+| `internal/readers/pool_reader_test.go` | изменён       |    99→280 |
+| `internal/readers/timed_reader.go`     | изменён       |     33→37 |
+| `internal/readers/timed_reader_test.go`| изменён       |   126→126 |
+| `internal/upstream/upstream.go`        | + новый       |        41 |
+| `internal/upstream/upstream_test.go`   | + новый       |       130 |

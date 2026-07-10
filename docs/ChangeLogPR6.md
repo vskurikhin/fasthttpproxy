@@ -91,16 +91,16 @@
 
 ## Сводка
 
-| Файл                    | Статус    | Строк |
-|-------------------------|-----------|------:|
-| `cmd/http/main.go`      | + новый   |   4   |
-| `cmd/proxy/main.go`     | изменён   |  25   |
-| `cmd/proxy_metrics/main.go` | + новый |  23   |
-| `cmd/proxy_metrics/main_test.go` | + новый | 14 |
-| `go.mod`                | изменён   |  27   |
-| `go.sum`                | изменён   |  ~70  |
-| `internal/metrics/metrics.go` | + новый | 46 |
-| `internal/pool/pool.go` | + новый   |  95   |
-| `internal/pool/pool_test.go` | + новый | 147 |
-| `internal/proxy/proxy.go` | + новый | 237 |
-| `internal/proxy/proxy_test.go` | + новый | 906 |
+| Файл                             | Статус    | Строк |
+|----------------------------------|-----------|------:|
+| `cmd/http/main.go`               | + новый   |     4 |
+| `cmd/proxy/main.go`              | изменён   |    25 |
+| `cmd/proxy_metrics/main.go`      | + новый   |    23 |
+| `cmd/proxy_metrics/main_test.go` | + новый   |    14 |
+| `go.mod`                         | изменён   |    27 |
+| `go.sum`                         | изменён   |   ~70 |
+| `internal/metrics/metrics.go`    | + новый   |    46 |
+| `internal/pool/pool.go`          | + новый   |    95 |
+| `internal/pool/pool_test.go`     | + новый   |   147 |
+| `internal/proxy/proxy.go`        | + новый   |   237 |
+| `internal/proxy/proxy_test.go`   | + новый   |   906 |
