@@ -11,6 +11,7 @@ import (
 	"github.com/valyala/fasthttp"
 	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
 	"github.com/vskurikhin/fasthttpproxy/internal/pool"
+	"github.com/vskurikhin/fasthttpproxy/internal/readers"
 )
 
 // Handler возвращает fasthttp.RequestHandler, реализующий стриминговый прокси.
@@ -22,12 +23,12 @@ func Handler() fasthttp.RequestHandler {
 }
 
 type handler struct {
-	ctx          *fasthttp.RequestCtx
-	req          *fasthttp.Request
-	upstreamAddr string
-	conn         net.Conn
-	br           *bufio.Reader
-	respHeader   *fasthttp.ResponseHeader
+	ctx             *fasthttp.RequestCtx
+	request         *fasthttp.Request
+	upstreamAddress string
+	connection      net.Conn
+	bufIOReader     *bufio.Reader
+	responseHeader  *fasthttp.ResponseHeader
 }
 
 /*
@@ -51,22 +52,24 @@ func (h *handler) handle() {
 		return
 	}
 
-	h.req = fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(h.req)
-	h.ctx.Request.CopyTo(h.req)
+	h.request = fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(h.request)
+	h.ctx.Request.CopyTo(h.request)
 
 	if !h.acquireUpstreamConn() {
 		return
 	}
-	defer pool.Put(h.upstreamAddr, h.conn)
 
 	if !h.writeRequestHeaders() {
+		pool.Put(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.writeRequestBody() {
+		pool.Put(h.upstreamAddress, h.connection)
 		return
 	}
 	if !h.readResponseHeaders() {
+		pool.Put(h.upstreamAddress, h.connection)
 		return
 	}
 	h.copyResponseStatus()
@@ -76,8 +79,8 @@ func (h *handler) handle() {
 // resolveUpstream извлекает адрес upstream из Host заголовка запроса.
 // При отсутствии Host возвращает 400 и завершает обработку.
 func (h *handler) resolveUpstream() bool {
-	h.upstreamAddr = string(h.ctx.Host())
-	if h.upstreamAddr == "" {
+	h.upstreamAddress = string(h.ctx.Host())
+	if h.upstreamAddress == "" {
 		h.ctx.Error("no host header", fasthttp.StatusBadRequest)
 		return false
 	}
@@ -88,7 +91,7 @@ func (h *handler) resolveUpstream() bool {
 // При ошибке возвращает 502 и завершает обработку.
 func (h *handler) acquireUpstreamConn() bool {
 	var err error
-	h.conn, err = pool.Get(h.upstreamAddr)
+	h.connection, err = pool.Get(h.upstreamAddress)
 	if err != nil {
 		h.ctx.Error("cannot connect to upstream", fasthttp.StatusBadGateway)
 		return false
@@ -99,9 +102,9 @@ func (h *handler) acquireUpstreamConn() bool {
 // writeRequestHeaders отправляет заголовки запроса upstream.
 // При ошибке записи или сброса буфера возвращает 502 и завершает обработку.
 func (h *handler) writeRequestHeaders() bool {
-	bw := bufio.NewWriter(h.conn)
+	bw := bufio.NewWriter(h.connection)
 
-	if err := h.req.Header.Write(bw); err != nil {
+	if err := h.request.Header.Write(bw); err != nil {
 		metrics.WriteErrors.Inc()
 		h.ctx.Error("upstream request header error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
@@ -124,7 +127,7 @@ func (h *handler) writeRequestBody() bool {
 	}()
 
 	if h.ctx.Request.IsBodyStream() {
-		if err := PipeCopy(h.ctx.Request.BodyStream(), h.conn); err != nil {
+		if err := PipeCopy(h.ctx.Request.BodyStream(), h.connection); err != nil {
 			h.ctx.Error("upstream request body stream error: "+err.Error(), fasthttp.StatusBadGateway)
 			return false
 		}
@@ -136,7 +139,7 @@ func (h *handler) writeRequestBody() bool {
 		return true
 	}
 
-	n, err := h.conn.Write(body)
+	n, err := h.connection.Write(body)
 	if err != nil {
 		metrics.WriteErrors.Inc()
 		h.ctx.Error("upstream request body write error: "+err.Error(), fasthttp.StatusBadGateway)
@@ -153,10 +156,10 @@ func (h *handler) writeRequestBody() bool {
 // readResponseHeaders читает заголовки ответа upstream.
 // При ошибке чтения возвращает 502 и завершает обработку.
 func (h *handler) readResponseHeaders() bool {
-	h.br = bufio.NewReader(h.conn)
+	h.bufIOReader = bufio.NewReader(h.connection)
 
-	h.respHeader = &fasthttp.ResponseHeader{}
-	if err := h.respHeader.Read(h.br); err != nil {
+	h.responseHeader = &fasthttp.ResponseHeader{}
+	if err := h.responseHeader.Read(h.bufIOReader); err != nil {
 		metrics.ReadErrors.Inc()
 		h.ctx.Error("upstream response error: "+err.Error(), fasthttp.StatusBadGateway)
 		return false
@@ -167,17 +170,17 @@ func (h *handler) readResponseHeaders() bool {
 // copyResponseStatus копирует статус и заголовки ответа upstream клиенту.
 // Если upstream вернул 5xx, заменяет статус на 502.
 func (h *handler) copyResponseStatus() {
-	if h.respHeader == nil {
+	if h.responseHeader == nil {
 		return
 	}
-	statusCode := h.respHeader.StatusCode()
+	statusCode := h.responseHeader.StatusCode()
 	if statusCode >= 500 {
 		metrics.Upstream5xx.Inc()
 		h.ctx.Response.SetStatusCode(fasthttp.StatusBadGateway)
-		log.Printf("upstream returned %d for %s", statusCode, h.upstreamAddr)
+		log.Printf("upstream returned %d for %s", statusCode, h.upstreamAddress)
 	} else {
 		h.ctx.Response.SetStatusCode(statusCode)
-		h.respHeader.CopyTo(&h.ctx.Response.Header)
+		h.responseHeader.CopyTo(&h.ctx.Response.Header)
 	}
 }
 
@@ -187,33 +190,14 @@ func (h *handler) copyResponseStatus() {
 func (h *handler) streamResponseBody() {
 	h.ctx.Response.ImmediateHeaderFlush = true
 
-	contentLen := h.respHeader.ContentLength()
-	tr := &timedReader{r: h.br}
+	contentLen := h.responseHeader.ContentLength()
+	tr := readers.NewTimedReader(h.bufIOReader)
+	pr := readers.NewPoolReader(tr, h.upstreamAddress, h.connection)
 	if contentLen >= 0 {
-		h.ctx.SetBodyStream(io.LimitReader(tr, int64(contentLen)), contentLen)
+		h.ctx.SetBodyStream(io.LimitReader(pr, int64(contentLen)), contentLen)
 	} else {
-		h.ctx.SetBodyStream(tr, -1)
+		h.ctx.SetBodyStream(pr, -1)
 	}
-}
-
-// timedReader оборачивает io.Reader и записывает время от первого Read до EOF в гистограмму.
-type timedReader struct {
-	r       io.Reader
-	started bool
-	start   time.Time
-}
-
-func (tr *timedReader) Read(p []byte) (int, error) {
-	if !tr.started {
-		tr.started = true
-		tr.start = time.Now()
-	}
-
-	n, err := tr.r.Read(p)
-	if err == io.EOF || (n > 0 && err != nil) {
-		metrics.ResponseBodyReadDuration.Observe(time.Since(tr.start).Seconds())
-	}
-	return n, err
 }
 
 // PipeCopy копирует данные из src в dst, используя буфер 64KB.

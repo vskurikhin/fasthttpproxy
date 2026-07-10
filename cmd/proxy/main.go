@@ -1,26 +1,24 @@
 package main
 
 import (
-	"net"
+	"log"
 	"time"
 
 	"github.com/valyala/fasthttp"
-	"github.com/vskurikhin/fasthttpproxy/fasthttpproxy"
 	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 	"github.com/vskurikhin/fasthttpproxy/internal/proxy"
 )
 
 func main() {
-	pool.SetDial(fasthttpproxy.FasthttpHTTPDialerDualStackTimeout("", 30*time.Second))
-
+	pool.HTTPDialerTimeout(30 * time.Second)
 	s := &fasthttp.Server{
-		StreamRequestBody:            true,
-		MaxRequestBodySize:           0,
-		DisablePreParseMultipartForm: true,
-		ReduceMemoryUsage:            true,
-		Handler:                      proxy.Handler(),
+		DisableHeaderNamesNormalizing: true,
+		DisablePreParseMultipartForm:  true,
+		Handler:                       proxy.Handler(),
+		LogAllErrors:                  true,
+		MaxRequestBodySize:            fasthttp.DefaultMaxRequestBodySize,
+		ReduceMemoryUsage:             true,
+		StreamRequestBody:             true,
 	}
-
-	ln, _ := net.Listen("tcp", ":8080")
-	s.Serve(ln) //nolint:errcheck
+	log.Fatal(s.ListenAndServe(":8080"))
 }
