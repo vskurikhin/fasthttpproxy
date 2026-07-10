@@ -23,30 +23,6 @@ type connPool struct {
 
 const maxUpstreamConnsPerHost = 100
 
-// customDial — не глобальная диал-функция, устанавливаемая через SetDial.
-// Если nil, используется fasthttp.Dial.
-var customDial func(addr string) (net.Conn, error)
-
-// SetDial устанавливает кастомную диал-функцию для всех соединений пула.
-// Обычно сюда передают fasthttpproxy.FasthttpHTTPDialer* или аналоги.
-//
-// Пример:
-//
-//	pool.SetDial(fasthttpproxy.FasthttpHTTPDialerDualStackTimeout("", 30*time.Second))
-//
-// Если dial равен nil, пул возвращается к fasthttp.Dial.
-func SetDial(dial func(addr string) (net.Conn, error)) {
-	customDial = dial
-}
-
-// dial возвращает соединение, используя customDial или fasthttp.Dial по умолчанию.
-func dial(addr string) (net.Conn, error) {
-	if customDial != nil {
-		return customDial(addr)
-	}
-	return fasthttp.Dial(addr)
-}
-
 // Get возвращает соединение к upstream из пула или создаёт новое.
 func Get(addr string) (net.Conn, error) {
 	v, _ := upstreamPool.LoadOrStore(addr, &connPool{})

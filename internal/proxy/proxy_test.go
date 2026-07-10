@@ -75,8 +75,8 @@ func TestResolveUpstreamSuccess(t *testing.T) {
 	if !ok {
 		t.Fatal("expected true")
 	}
-	if h.upstreamAddr != "example.com:8080" {
-		t.Fatalf("expected 'example.com:8080', got %q", h.upstreamAddr)
+	if h.upstreamAddress != "example.com:8080" {
+		t.Fatalf("expected 'example.com:8080', got %q", h.upstreamAddress)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestResolveUpstreamMissingHost(t *testing.T) {
 	if ok {
 		t.Fatal("expected false")
 	}
-	if h.upstreamAddr != "" {
-		t.Fatalf("expected empty upstreamAddr, got %q", h.upstreamAddr)
+	if h.upstreamAddress != "" {
+		t.Fatalf("expected empty upstreamAddress, got %q", h.upstreamAddress)
 	}
 	// Проверяем, что Error был вызван (проверяем тело ответа)
 	if len(ctx.Response.Body()) == 0 {
@@ -123,15 +123,15 @@ func TestAcquireUpstreamConnSuccess(t *testing.T) {
 	ctx.Init(&fasthttp.Request{}, nil, nil)
 
 	h := &handler{
-		ctx:          &ctx,
-		upstreamAddr: ln.Addr().String(),
+		ctx:             &ctx,
+		upstreamAddress: ln.Addr().String(),
 	}
 	ok := h.acquireUpstreamConn()
 
 	if !ok {
 		t.Fatal("expected true")
 	}
-	if h.conn == nil {
+	if h.connection == nil {
 		t.Fatal("expected non-nil conn")
 	}
 }
@@ -141,8 +141,8 @@ func TestAcquireUpstreamConnFail(t *testing.T) {
 	ctx.Init(&fasthttp.Request{}, nil, nil)
 
 	h := &handler{
-		ctx:          &ctx,
-		upstreamAddr: "127.0.0.1:1",
+		ctx:             &ctx,
+		upstreamAddress: "127.0.0.1:1",
 	}
 	ok := h.acquireUpstreamConn()
 
@@ -166,9 +166,9 @@ func TestWriteRequestHeadersSuccess(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
-		req:  &req,
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
 	}
 
 	ok := h.writeRequestHeaders()
@@ -193,9 +193,9 @@ func TestWriteRequestHeadersHeaderWriteError(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
-		req:  &req,
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
 	}
 
 	ok := h.writeRequestHeaders()
@@ -214,9 +214,9 @@ func TestWriteRequestHeadersFlushError(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
-		req:  &req,
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
 	}
 
 	// После записи заголовков закрываем conn перед flush.
@@ -224,7 +224,7 @@ func TestWriteRequestHeadersFlushError(t *testing.T) {
 	// writeRequestHeaders создаёт свой bw внутри — мы не можем вклиниться.
 	// Вместо этого тестируем косвенно: если conn.Write упадёт при Flush.
 	// Используем writer, который успешно пишет первый раз, но падает при втором write.
-	h.conn = mc
+	h.connection = mc
 
 	ok := h.writeRequestHeaders()
 	if !ok {
@@ -249,8 +249,8 @@ func TestWriteRequestBodyStreamSuccess(t *testing.T) {
 	ctx.Request.SetBodyStream(strings.NewReader("stream-body"), -1)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -274,8 +274,8 @@ func TestWriteRequestBodyStreamError(t *testing.T) {
 	ctx.Request.SetBodyStream(strings.NewReader("stream-body"), -1)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -294,8 +294,8 @@ func TestWriteRequestBodyNoBody(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -318,8 +318,8 @@ func TestWriteRequestBodyFixedBodySuccess(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -343,8 +343,8 @@ func TestWriteRequestBodyFixedBodyWriteError(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -366,8 +366,8 @@ func TestWriteRequestBodyFixedBodyShortWrite(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -386,19 +386,19 @@ func TestReadResponseHeadersSuccess(t *testing.T) {
 	ctx.Init(&fasthttp.Request{}, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.readResponseHeaders()
 	if !ok {
 		t.Fatal("expected true")
 	}
-	if h.respHeader == nil {
+	if h.responseHeader == nil {
 		t.Fatal("expected non-nil respHeader")
 	}
-	if h.respHeader.StatusCode() != 200 {
-		t.Fatalf("expected status 200, got %d", h.respHeader.StatusCode())
+	if h.responseHeader.StatusCode() != 200 {
+		t.Fatalf("expected status 200, got %d", h.responseHeader.StatusCode())
 	}
 }
 
@@ -410,8 +410,8 @@ func TestReadResponseHeadersError(t *testing.T) {
 	ctx.Init(&fasthttp.Request{}, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.readResponseHeaders()
@@ -435,9 +435,9 @@ func TestCopyResponseStatusUnder500(t *testing.T) {
 	respHeader.SetContentType("text/plain")
 
 	h := &handler{
-		ctx:          &ctx,
-		respHeader:   respHeader,
-		upstreamAddr: "example.com",
+		ctx:             &ctx,
+		responseHeader:  respHeader,
+		upstreamAddress: "example.com",
 	}
 
 	h.copyResponseStatus()
@@ -455,9 +455,9 @@ func TestCopyResponseStatus500Plus(t *testing.T) {
 	respHeader.SetStatusCode(502)
 
 	h := &handler{
-		ctx:          &ctx,
-		respHeader:   respHeader,
-		upstreamAddr: "example.com",
+		ctx:             &ctx,
+		responseHeader:  respHeader,
+		upstreamAddress: "example.com",
 	}
 
 	h.copyResponseStatus()
@@ -476,9 +476,9 @@ func TestCopyResponseStatus503(t *testing.T) {
 	respHeader.SetStatusCode(503)
 
 	h := &handler{
-		ctx:          &ctx,
-		respHeader:   respHeader,
-		upstreamAddr: "example.com",
+		ctx:             &ctx,
+		responseHeader:  respHeader,
+		upstreamAddress: "example.com",
 	}
 
 	h.copyResponseStatus()
@@ -501,10 +501,10 @@ func TestStreamResponseBodyWithContentLength(t *testing.T) {
 	respHeader.SetContentLength(5)
 
 	h := &handler{
-		ctx:        &ctx,
-		conn:       mc,
-		br:         bufio.NewReader(mc),
-		respHeader: respHeader,
+		ctx:            &ctx,
+		connection:     mc,
+		bufIOReader:    bufio.NewReader(mc),
+		responseHeader: respHeader,
 	}
 
 	h.streamResponseBody()
@@ -527,10 +527,10 @@ func TestStreamResponseBodyChunked(t *testing.T) {
 	// ContentLength = -1 означает chunked/identity
 
 	h := &handler{
-		ctx:        &ctx,
-		conn:       mc,
-		br:         bufio.NewReader(mc),
-		respHeader: respHeader,
+		ctx:            &ctx,
+		connection:     mc,
+		bufIOReader:    bufio.NewReader(mc),
+		responseHeader: respHeader,
 	}
 
 	h.streamResponseBody()
@@ -698,9 +698,9 @@ func TestWriteRequestHeadersHeaderWriteErrorControlled(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
-		req:  &req,
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
 	}
 
 	ok := h.writeRequestHeaders()
@@ -722,9 +722,9 @@ func TestWriteRequestHeadersFlushErrorControlled(t *testing.T) {
 	ctx.Init(&req, nil, nil)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
-		req:  &req,
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
 	}
 
 	// Header.Write пишет в bufio.Writer (буфер в памяти — успешно).
@@ -749,8 +749,8 @@ func TestWriteRequestBodyStreamPipeCopyError(t *testing.T) {
 	ctx.Request.SetBodyStream(strings.NewReader("stream-body"), -1)
 
 	h := &handler{
-		ctx:  &ctx,
-		conn: mc,
+		ctx:        &ctx,
+		connection: mc,
 	}
 
 	ok := h.writeRequestBody()
@@ -893,9 +893,9 @@ func TestCopyResponseStatusNilHeader(t *testing.T) {
 	ctx.Init(&fasthttp.Request{}, nil, nil)
 
 	h := &handler{
-		ctx:          &ctx,
-		respHeader:   nil,
-		upstreamAddr: "example.com",
+		ctx:             &ctx,
+		responseHeader:  nil,
+		upstreamAddress: "example.com",
 	}
 
 	// Должен не запаниковать, а просто установить статус по умолчанию
