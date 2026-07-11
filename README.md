@@ -11,11 +11,14 @@ cmd/proxy/main.go
 ├── internal/config/      — Парсинг CLI-флагов, единая структура Values
 ├── internal/metrics/     — Prometheus-счётчики и гистограммы
 ├── internal/upstream/    — Список upstream-серверов со случайным выбором
-├── internal/pool/        — Пул TCP-соединений (per-upstream, лимиты/таймауты)
-│   └── dial.go           — HTTP-прокси диалер через fasthttpproxy
+├── internal/pool/        — Пул TCP-соединений + пулы bufio.Writer/Reader/PipeCopy
+│   ├── pool.go           — Базовые типы пула соединений, сеттеры
+│   ├── upstream_pool.go  — Acquire/Release/CloseAndDrop соединений
+│   ├── dial.go           — HTTP-прокси диалер через fasthttpproxy
+│   └── bufio_pool.go     — sync.Pool для bufio.Writer, bufio.Reader, PipeCopy (64KB)
 ├── internal/proxy/       — Стриминговый proxy handler (7 методов, SRP)
 │   └── handler.go        — Оркестрация запросов: resolve → acquire → write → read → stream
-├── internal/readers/     — PoolReader (жизненный цикл соединения) + TimedReader (метрики)
+├── internal/readers/     — PoolReader (жизненный цикл соединения + onDone-колбэк) + TimedReader
 └── fasthttpproxy/        — SOCKS5/HTTP proxy dialers (из fasthttp upstream)
 ```
 
@@ -23,8 +26,10 @@ cmd/proxy/main.go
 
 ## Возможности
 
-- **Сквозной стриминг**: тело запроса — `PipeCopy` (64KB буфер), тело ответа — `PoolReader` + `ImmediateHeaderFlush`.
+- **Сквозной стриминг**: тело запроса — `PipeCopy` (64KB буфер из пула `pipeCopyBufPool`), тело ответа — `PoolReader` + `ImmediateHeaderFlush`.
 - **Пул соединений**: per-upstream пул с LIFO-извлечением, idle timeout (по умолч. 45s), макс. соединений (по умолч. 100).
+- **Пулы bufio**: `bufIOWriterPool` и `bufIOReaderPool` для переиспользования буферов записи/чтения заголовков; размер настраивается через `--io-buffers-size`.
+- **Пул PipeCopy**: `pipeCopyBufPool` для 64KB буфера копирования тела запроса; размер настраивается через `--copy-buffers-size`.
 - **Метрики Prometheus**: counters (dial errors, close errors, write/read errors, upstream 5xx, idle drops) и histograms (длительность записи/чтения тела).
 - **5xx → 502**: upstream 5xx ответы заменяются на 502 Bad Gateway.
 - **Выбор upstream**: из CLI-списка (рандом) или динамически из Host заголовка.
@@ -38,39 +43,41 @@ cmd/proxy/main.go
 
 Все флаги парсятся через `--` (long form). Полный список:
 
-| Флаг | По умолчанию | Описание |
-|------|-------------|----------|
-| `--concurrency` | 262144 | Макс. одновременных запросов |
-| `--dialer-timeout` | 30s | Таймаут TCP-диалера к upstream |
-| `--idle-timeout` | 45s | Таймаут бездействия соединения в пуле (мин. 1s) |
-| `--max-conns` | 100 | Макс. соединений на upstream (мин. 1) |
-| `--max-body-size` | 4 MiB | Макс. размер тела запроса |
-| `--max-conns-per-ip` | 0 (без лимита) | Макс. соединений на IP |
-| `--max-reqs-per-conn` | 0 (без лимита) | Макс. запросов на соединение |
-| `--metrics-addr` | `:7070` | Адрес metrics HTTP-сервера |
-| `--proxy-addr` | `:8080` | Адрес proxy HTTP-сервера |
-| `--read-buffer-size` | 0 (fasthttp default) | Размер буфера чтения |
-| `--write-buffer-size` | 0 (fasthttp default) | Размер буфера записи |
-| `--read-timeout` | 0 (без лимита) | Таймаут чтения |
-| `--write-timeout` | 0 (без лимита) | Таймаут записи |
-| `--upstreams` | `""` | Список upstream через запятую (`http://host:port` или `https://host:port`) |
-| `--tls-enabled` | false | Включить TLS для upstream-соединений |
-| `--tls-insecure-skip-verify` | false | Пропускать проверку сертификатов upstream |
-| `--tls-ca-file` | `""` | Путь к CA-сертификату для проверки upstream |
-| `--tls-server-name` | `""` | Имя сервера для TLS (SNI) |
-| `--tls-server-enabled` | false | Включить TLS для прокси-сервера |
-| `--tls-server-certificate-pem-file` | `""` | Путь к PEM-файлу сертификата сервера |
-| `--tls-server-key-pem-file` | `""` | Путь к PEM-файлу ключа сервера |
-| `--disable-header-norm` | true | Отключить нормализацию заголовков |
-| `--disable-keepalive` | false | Отключить keepalive |
-| `--disable-preparse-multipart` | false | Отключить предпарсинг multipart |
-| `--get-only` | false | Только GET-запросы |
-| `--log-all-errors` | true | Логировать все ошибки |
-| `--no-default-content-type` | false | Не устанавливать Content-Type по умолч. |
-| `--no-default-date` | false | Не устанавливать Date по умолч. |
-| `--no-default-server-header` | true | Не устанавливать Server-заголовок |
-| `--reduce-memory-usage` | true | Режим пониженного потребления памяти |
-| `--secure-error-log` | true | Безопасный лог ошибок |
+| Флаг                                | По умолчанию         | Описание                                                                   |
+|-------------------------------------|----------------------|----------------------------------------------------------------------------|
+| `--concurrency`                     | 262144               | Макс. одновременных запросов                                               |
+| `--dialer-timeout`                  | 30s                  | Таймаут TCP-диалера к upstream                                             |
+| `--idle-timeout`                    | 45s                  | Таймаут бездействия соединения в пуле (мин. 1s)                            |
+| `--max-conns`                       | 100                  | Макс. соединений на upstream (мин. 1)                                      |
+| `--max-body-size`                   | 4 MiB                | Макс. размер тела запроса                                                  |
+| `--max-conns-per-ip`                | 0 (без лимита)       | Макс. соединений на IP                                                     |
+| `--max-reqs-per-conn`               | 0 (без лимита)       | Макс. запросов на соединение                                               |
+| `--metrics-addr`                    | `:7070`              | Адрес metrics HTTP-сервера                                                 |
+| `--proxy-addr`                      | `:8080`              | Адрес proxy HTTP-сервера                                                   |
+| `--read-buffer-size`                | 0 (fasthttp default) | Размер буфера чтения                                                       |
+| `--write-buffer-size`               | 0 (fasthttp default) | Размер буфера записи                                                       |
+| `--read-timeout`                    | 0 (без лимита)       | Таймаут чтения                                                             |
+| `--write-timeout`                   | 0 (без лимита)       | Таймаут записи                                                             |
+| `--upstreams`                       | `""`                 | Список upstream через запятую (`http://host:port` или `https://host:port`) |
+| `--io-buffers-size`                 | 4096                 | Размер буфера bufio.Writer/Reader (мин. 64)                               |
+| `--copy-buffers-size`               | 65536                | Размер буфера PipeCopy для копирования тела запроса (мин. 256)            |
+| `--tls-enabled`                     | false                | Включить TLS для upstream-соединений                                       |
+| `--tls-insecure-skip-verify`        | false                | Пропускать проверку сертификатов upstream                                  |
+| `--tls-ca-file`                     | `""`                 | Путь к CA-сертификату для проверки upstream                                |
+| `--tls-server-name`                 | `""`                 | Имя сервера для TLS (SNI)                                                  |
+| `--tls-server-enabled`              | false                | Включить TLS для прокси-сервера                                            |
+| `--tls-server-certificate-pem-file` | `""`                 | Путь к PEM-файлу сертификата сервера                                       |
+| `--tls-server-key-pem-file`         | `""`                 | Путь к PEM-файлу ключа сервера                                             |
+| `--disable-header-norm`             | true                 | Отключить нормализацию заголовков                                          |
+| `--disable-keepalive`               | false                | Отключить keepalive                                                        |
+| `--disable-preparse-multipart`      | false                | Отключить предпарсинг multipart                                            |
+| `--get-only`                        | false                | Только GET-запросы                                                         |
+| `--log-all-errors`                  | true                 | Логировать все ошибки                                                      |
+| `--no-default-content-type`         | false                | Не устанавливать Content-Type по умолч.                                    |
+| `--no-default-date`                 | false                | Не устанавливать Date по умолч.                                            |
+| `--no-default-server-header`        | true                 | Не устанавливать Server-заголовок                                          |
+| `--reduce-memory-usage`             | true                 | Режим пониженного потребления памяти                                       |
+| `--secure-error-log`                | true                 | Безопасный лог ошибок                                                      |
 
 ---
 
@@ -104,6 +111,11 @@ cmd/proxy/main.go
   --tls-server-certificate-pem-file "/path/to/cert.pem" \
   --tls-server-key-pem-file "/path/to/key.pem" \
   --tls-server-name "example.com"
+
+# Кастомные размеры буферов
+./cmd/proxy/fasthttpproxy-server \
+  --io-buffers-size 8192 \
+  --copy-buffers-size 131072
 ```
 
 ---
@@ -125,7 +137,7 @@ go test -bench=. -benchmem ./...    # бенчмарки
 - `cmd/proxy/` — точка входа, парсинг флагов, запуск сервера
 - `internal/config/` — конфигурация (Values, ParseFlags)
 - `internal/metrics/` — Prometheus-метрики
-- `internal/pool/` — пул соединений (pool.go + upstream_pool.go + dial.go)
+- `internal/pool/` — пул соединений + bufio/PipeCopy пулы (pool.go + upstream_pool.go + dial.go + bufio_pool.go)
 - `internal/proxy/` — стриминговый handler (handler.go)
 - `internal/readers/` — PoolReader + TimedReader
 - `internal/upstream/` — селектор upstream-серверов
@@ -136,6 +148,7 @@ go test -bench=. -benchmem ./...    # бенчмарки
 - `internal/pool/pool.go` — базовые типы, сеттеры, dialNew
 - `internal/pool/upstream_pool.go` — глобальный пул, Acquire/Release/CloseAndDrop
 - `internal/pool/dial.go` — кастомный dial через fasthttpproxy или fasthttp.Dial
-- `internal/proxy/handler.go` — 7 методов по SRP, оркестрация handle()
-- `internal/readers/pool_reader.go` — возврат/закрытие соединения после чтения тела
+- `internal/pool/bufio_pool.go` — sync.Pool для bufio.Writer, bufio.Reader, PipeCopy (64KB), размеры настраиваются через `BufferSize()` / `PipeCopyBufferSize()`
+- `internal/proxy/handler.go` — 7 методов по SRP, оркестрация handle(), использует пулы bufio и PipeCopy из pool
+- `internal/readers/pool_reader.go` — возврат/закрытие соединения после чтения тела, onDone-колбэк для освобождения bufio.Reader
 - `internal/readers/timed_reader.go` — замер длительности чтения ответа
