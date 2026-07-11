@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -16,6 +17,8 @@ import (
 	"github.com/vskurikhin/fasthttpproxy/internal/readers"
 	"github.com/vskurikhin/fasthttpproxy/internal/upstream"
 )
+
+const PipeCopyBufferSize = 64 * 1024
 
 var upstreamsObj = upstream.NewUpstreams(nil)
 
@@ -231,10 +234,21 @@ func (h *handler) streamResponseBody() {
 	h.ctx.SetBodyStream(pr, contentLen)
 }
 
-// PipeCopy копирует данные из src в dst, используя буфер 64KB.
+// pipeCopyBufPool — пул буферов 64KB для PipeCopy (аналог copyBufPool в fasthttp).
+var pipeCopyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, PipeCopyBufferSize)
+		return b
+	},
+}
+
+// PipeCopy копирует данные из src в dst, используя буфер 64KB из пула.
 // Возвращает ошибку при неудачной записи.
 func PipeCopy(src io.Reader, dst net.Conn) error {
-	buf := make([]byte, 64*1024)
+	poolBuf := pipeCopyBufPool.Get()
+	buf := poolBuf.([]byte)
+	defer pipeCopyBufPool.Put(poolBuf)
+
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
