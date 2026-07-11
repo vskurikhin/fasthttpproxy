@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"fmt"
 	"log"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -9,6 +11,7 @@ import (
 	"github.com/vskurikhin/fasthttpproxy/internal/config"
 	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 	"github.com/vskurikhin/fasthttpproxy/internal/proxy"
+	"github.com/vskurikhin/fasthttpproxy/internal/upstream"
 )
 
 func main() {
@@ -25,6 +28,16 @@ func runWith(values config.Values) error {
 	pool.HTTPDialerTimeout(values.DialerTimeout)
 	pool.IdleTimeout(values.IdleTimeout)
 	pool.MaxConnectionsPerHost(values.MaxConnections)
+
+	// Установить TLS конфигурацию
+	if values.TLSEnabled {
+		tlsCfg, err := upstream.NewTLSConfig(values)
+		if err != nil {
+			return fmt.Errorf("failed to create TLS config: %w", err)
+		}
+		pool.TLSConfig(tlsCfg)
+	}
+
 	metricsHandler := fasthttpadaptor.NewFastHTTPHandler(promhttp.Handler())
 	proxyHandler := proxy.Handler(values.Upstreams)
 
@@ -59,6 +72,12 @@ func runWith(values config.Values) error {
 		WriteBufferSize:               values.WriteBufferSize,
 		WriteTimeout:                  values.WriteTimeout,
 	}
+	// Установить TLS конфигурацию
+	if values.TLSEnabled {
+		if tlsConfig, ok := constructTLSConfig(values); ok {
+			s.TLSConfig = tlsConfig
+		}
+	}
 	return s.ListenAndServe(values.ProxyAddr)
 }
 
@@ -66,4 +85,30 @@ func serveMetrics(addr string, handler fasthttp.RequestHandler) {
 	if err := fasthttp.ListenAndServe(addr, handler); err != nil {
 		log.Printf("metrics server error: %v", err)
 	}
+}
+
+// constructTLSConfig Создаём конфигурацию TLS.
+// MinVersion: tls.VersionTLS12, // Требовать TLS 1.2.
+func constructTLSConfig(values config.Values) (*tls.Config, bool) {
+	result := &tls.Config{}
+	if values.TLSServerName == "" {
+		return result, false
+	}
+	if values.TLSServerCertificatePemFile == "" || values.TLSServerKeyPemFile == "" {
+		return result, false
+	}
+
+	var err error
+	result.Certificates = make([]tls.Certificate, 1)
+	result.Certificates[0], err = tls.LoadX509KeyPair(values.TLSServerCertificatePemFile, values.TLSServerKeyPemFile)
+	if err != nil {
+		log.Printf("proxy server start in HTTP! because tls server error: %v", err)
+		return result, false
+	}
+
+	result.ServerName = values.TLSServerName
+	result.InsecureSkipVerify = values.TLSInsecureSkipVerify
+	result.MinVersion = tls.VersionTLS12
+
+	return result, true
 }

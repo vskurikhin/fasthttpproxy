@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/valyala/fasthttp"
@@ -85,8 +86,8 @@ func (h *handler) handle() {
 // resolveUpstream определяет адрес upstream.
 // Если задан список upstream-серверов, выбирает случайный; иначе использует Host из запроса.
 func (h *handler) resolveUpstream() bool {
-	if addr, ok := upstreamsObj.Random(); ok {
-		h.upstreamAddress = addr
+	if up, ok := upstreamsObj.Random(); ok {
+		h.upstreamAddress = up.Address
 		return true
 	}
 
@@ -95,6 +96,11 @@ func (h *handler) resolveUpstream() bool {
 		log.Printf("no upstream address")
 		h.ctx.Error("no host header", fasthttp.StatusBadRequest)
 		return false
+	}
+	// Добавить схему по умолчанию, если не указана
+	if !strings.HasPrefix(h.upstreamAddress, "http://") &&
+		!strings.HasPrefix(h.upstreamAddress, "https://") {
+		h.upstreamAddress = "http://" + h.upstreamAddress
 	}
 	_, err := url.Parse(h.upstreamAddress)
 	if err != nil {

@@ -29,6 +29,8 @@ cmd/proxy/main.go
 - **5xx → 502**: upstream 5xx ответы заменяются на 502 Bad Gateway.
 - **Выбор upstream**: из CLI-списка (рандом) или динамически из Host заголовка.
 - **Прокси-диалер**: поддержка HTTP CONNECT и SOCKS5 через `fasthttpproxy` (из fasthttp).
+- **TLS/HTTPS для upstream**: поддержка `https://` схемы в адресах upstream, глобальная TLS-конфигурация (CA-файл, InsecureSkipVerify, SNI).
+- **TLS для прокси-сервера**: опциональный серверный TLS через PEM-сертификат и ключ.
 
 ---
 
@@ -51,7 +53,14 @@ cmd/proxy/main.go
 | `--write-buffer-size` | 0 (fasthttp default) | Размер буфера записи |
 | `--read-timeout` | 0 (без лимита) | Таймаут чтения |
 | `--write-timeout` | 0 (без лимита) | Таймаут записи |
-| `--upstreams` | `""` | Список upstream через запятую (host:port) |
+| `--upstreams` | `""` | Список upstream через запятую (`http://host:port` или `https://host:port`) |
+| `--tls-enabled` | false | Включить TLS для upstream-соединений |
+| `--tls-insecure-skip-verify` | false | Пропускать проверку сертификатов upstream |
+| `--tls-ca-file` | `""` | Путь к CA-сертификату для проверки upstream |
+| `--tls-server-name` | `""` | Имя сервера для TLS (SNI) |
+| `--tls-server-enabled` | false | Включить TLS для прокси-сервера |
+| `--tls-server-certificate-pem-file` | `""` | Путь к PEM-файлу сертификата сервера |
+| `--tls-server-key-pem-file` | `""` | Путь к PEM-файлу ключа сервера |
 | `--disable-header-norm` | true | Отключить нормализацию заголовков |
 | `--disable-keepalive` | false | Отключить keepalive |
 | `--disable-preparse-multipart` | false | Отключить предпарсинг multipart |
@@ -77,6 +86,24 @@ cmd/proxy/main.go
   --dialer-timeout 10s \
   --idle-timeout 60s \
   --max-conns 200
+
+# HTTPS upstream с TLS
+./cmd/proxy/fasthttpproxy-server \
+  --upstreams "https://secure.example.com:443" \
+  --tls-enabled \
+  --tls-insecure-skip-verify
+
+# Смешанные HTTP/HTTPS upstream
+./cmd/proxy/fasthttpproxy-server \
+  --upstreams "http://localhost:8080,https://secure.example.com:443" \
+  --tls-enabled
+
+# TLS на стороне прокси-сервера
+./cmd/proxy/fasthttpproxy-server \
+  --tls-server-enabled \
+  --tls-server-certificate-pem-file "/path/to/cert.pem" \
+  --tls-server-key-pem-file "/path/to/key.pem" \
+  --tls-server-name "example.com"
 ```
 
 ---
