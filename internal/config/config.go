@@ -18,16 +18,17 @@ const (
 //goland:noinspection GoLinter
 type Values struct {
 	Concurrency, MaxConnections     int
-	IdleTimeout, DialerTimeout      time.Duration
-	MaxRequestBodySize              int
-	MetricsAddr, ProxyAddr          string
-	Upstreams                       []string
+	CopyBuffersSize                 int
 	DisableHeaderNamesNormalizing   bool
 	DisableKeepalive                bool
 	DisablePreParseMultipartForm    bool
 	GetOnly, LogAllErrors           bool
+	IOBuffersSize                   int
+	IdleTimeout, DialerTimeout      time.Duration
 	MaxConnectionsPerIP             int
+	MaxRequestBodySize              int
 	MaxRequestsPerConn              int
+	MetricsAddr, ProxyAddr          string
 	NoDefaultContentType            bool
 	NoDefaultDate                   bool
 	NoDefaultServerHeader           bool
@@ -35,10 +36,7 @@ type Values struct {
 	ReadTimeout, WriteTimeout       time.Duration
 	ReduceMemoryUsage               bool
 	SecureErrorLogMessage           bool
-
-	// Pool buffer sizes
-	IOBuffersSize   int // --io-buffers-size, размер буфера для bufio.Writer/Reader (по умолчанию 4096)
-	CopyBuffersSize int // --copy-buffers-size, размер буфера для PipeCopy (по умолчанию 65536)
+	Upstreams                       []string
 
 	// TLS configuration
 	TLSCAFile                   string // --tls-ca-file
@@ -54,12 +52,14 @@ type Values struct {
 // Поддерживаемые флаги:
 //
 //	--concurrency                  макс. кол-во одновременных запросов к прокси (по умолчанию 262144)
+//	--copy-buffers-size            размер буфера для PipeCopy (по умолчанию 65536, минимум 256)
 //	--dialer-timeout               таймаут функции устанавливающих tcp-upstream-соединения (по умолчанию 30s)
 //	--disable-header-norm          отключить нормализацию заголовков (по умолчанию true)
 //	--disable-keepalive            отключить keepalive (по умолчанию false)
 //	--disable-preparse-multipart   отключить предварительный парсинг multipart (по умолчанию false)
 //	--get-only                     только GET-запросы (по умолчанию false)
 //	--idle-timeout                 таймаут бездействия соединения в пуле (по умолчанию 45s, минимум 1s)
+//	--io-buffers-size              размер буфера для bufio.Writer/Reader (по умолчанию 4096, минимум 64)
 //	--log-all-errors               логировать все ошибки (по умолчанию true)
 //	--max-body-size                макс. размер тела запроса (по умолчанию 4 МегаБайта)
 //	--max-conns                    макс. кол-во соединений на upstream (по умолчанию 100, минимум 1)
@@ -77,18 +77,17 @@ type Values struct {
 //	--upstreams                    список upstream-серверов через запятую (host:port)
 //	--write-buffer-size            размер буфера записи (по умолчанию 0 = по умолчанию в fastHTTP)
 //	--write-timeout                таймаут записи (по умолчанию 0 = по умолчанию в fastHTTP)
-//
-//	--io-buffers-size              размер буфера для bufio.Writer/Reader (по умолчанию 4096, минимум 64)
-//	--copy-buffers-size            размер буфера для PipeCopy (по умолчанию 65536, минимум 256)
 func ParseFlags() Values {
 	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
 	concurrencyFlag := fs.Int("concurrency", 256*1024, "Max concurrent requests to proxy (fasthttp.DefaultConcurrency)")
+	copyBuffersSizeFlag := fs.Int("copy-buffers-size", 65536, "Buffer size for PipeCopy (default 65536, minimum 256)")
 	dialerTimeoutFlag := fs.Duration("dialer-timeout", 30*time.Second, "Dial timeout for upstream connections (default 30s)")
 	disableHeaderNormFlag := fs.Bool("disable-header-norm", true, "Disable header names normalizing")
 	disableKeepaliveFlag := fs.Bool("disable-keepalive", false, "Disable keepalive")
 	disablePreparseMultipartFlag := fs.Bool("disable-preparse-multipart", false, "Disable pre-parse multipart form")
 	getOnlyFlag := fs.Bool("get-only", false, "Get only mode")
 	idleTimeoutFlag := fs.Duration("idle-timeout", 45*time.Second, "Idle timeout for connections in pool (minimum 1s)")
+	ioBuffersSizeFlag := fs.Int("io-buffers-size", 4096, "Buffer size for bufio.Writer/Reader (default 4096, minimum 64)")
 	logAllErrorsFlag := fs.Bool("log-all-errors", true, "Log all errors")
 	maxBodySizeFlag := fs.Int("max-body-size", 4*1024*1024, "Max request body size in bytes (4 MiB)")
 	maxConnectionsFlag := fs.Int("max-conns", 100, "Max concurrent connections per upstream (minimum 1)")
@@ -118,8 +117,6 @@ func ParseFlags() Values {
 	tlsServerKeyPemFileFlag := fs.String(
 		"tls-server-key-pem-file", "",
 		"TLS server private key PEM file for TLS verification")
-	ioBuffersSizeFlag := fs.Int("io-buffers-size", 4096, "Buffer size for bufio.Writer/Reader (default 4096, minimum 64)")
-	copyBuffersSizeFlag := fs.Int("copy-buffers-size", 65536, "Buffer size for PipeCopy (default 65536, minimum 256)")
 	tlsServerEnabledFlag := fs.Bool("tls-server-enabled", false, "Enable TLS for proxy server")
 
 	err := fs.Parse(os.Args[1:])
@@ -133,15 +130,17 @@ func ParseFlags() Values {
 	}
 	return Values{
 		Concurrency:                   *concurrencyFlag,
+		CopyBuffersSize:               *copyBuffersSizeFlag,
 		DialerTimeout:                 *dialerTimeoutFlag,
 		DisableHeaderNamesNormalizing: *disableHeaderNormFlag,
 		DisableKeepalive:              *disableKeepaliveFlag,
 		DisablePreParseMultipartForm:  *disablePreparseMultipartFlag,
 		GetOnly:                       *getOnlyFlag,
+		IOBuffersSize:                 *ioBuffersSizeFlag,
 		IdleTimeout:                   *idleTimeoutFlag,
 		LogAllErrors:                  *logAllErrorsFlag,
-		MaxConnectionsPerIP:           *maxConnectionsPerIPFlag,
 		MaxConnections:                *maxConnectionsFlag,
+		MaxConnectionsPerIP:           *maxConnectionsPerIPFlag,
 		MaxRequestBodySize:            *maxBodySizeFlag,
 		MaxRequestsPerConn:            *maxRequestsPerConnFlag,
 		MetricsAddr:                   *metricsAddrFlag,
@@ -153,8 +152,6 @@ func ParseFlags() Values {
 		ReadTimeout:                   *readTimeoutFlag,
 		ReduceMemoryUsage:             *reduceMemoryUsageFlag,
 		SecureErrorLogMessage:         *secureErrorLogFlag,
-		IOBuffersSize:                 *ioBuffersSizeFlag,
-		CopyBuffersSize:               *copyBuffersSizeFlag,
 		TLSCAFile:                     *tlsCAFileFlag,
 		TLSEnabled:                    *tlsEnabledFlag,
 		TLSInsecureSkipVerify:         *tlsInsecureSkipVerifyFlag,

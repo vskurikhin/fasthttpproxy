@@ -25,10 +25,10 @@ func run() error {
 }
 
 func runWith(values config.Values) error {
+	pool.BufferSize(values.IOBuffersSize)
 	pool.HTTPDialerTimeout(values.DialerTimeout)
 	pool.IdleTimeout(values.IdleTimeout)
 	pool.MaxConnectionsPerHost(values.MaxConnections)
-	pool.BufferSize(values.IOBuffersSize)
 	pool.PipeCopyBufferSize(values.CopyBuffersSize)
 
 	// Установить TLS конфигурацию
