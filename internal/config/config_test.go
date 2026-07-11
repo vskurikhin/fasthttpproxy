@@ -382,6 +382,18 @@ func TestParseFlagsAllDefaults(t *testing.T) {
 	if v.WriteTimeout != 0 {
 		t.Fatalf("expected WriteTimeout=0, got %v", v.WriteTimeout)
 	}
+	if v.TLSEnabled {
+		t.Fatal("expected TLSEnabled=false")
+	}
+	if v.TLSInsecureSkipVerify {
+		t.Fatal("expected TLSInsecureSkipVerify=false")
+	}
+	if v.TLSCAFile != "" {
+		t.Fatalf("expected TLSCAFile='', got %q", v.TLSCAFile)
+	}
+	if v.TLSServerName != "" {
+		t.Fatalf("expected TLSServerName='', got %q", v.TLSServerName)
+	}
 }
 
 func TestParseUpstreamsDirect(t *testing.T) {
@@ -417,5 +429,107 @@ func TestAddrAppendValidURL(t *testing.T) {
 	result = addrAppend(result, "http://example.com")
 	if len(result) != 1 || result[0] != "http://example.com" {
 		t.Fatalf("expected [http://example.com], got %v", result)
+	}
+}
+
+func TestAddrAppendNoScheme(t *testing.T) {
+	var result []string
+	result = addrAppend(result, "example.com:8080")
+	if len(result) != 1 || result[0] != "http://example.com:8080" {
+		t.Fatalf("expected [http://example.com:8080], got %v", result)
+	}
+}
+
+func TestAddrAppendHTTPS(t *testing.T) {
+	var result []string
+	result = addrAppend(result, "https://secure.example.com:443")
+	if len(result) != 1 || result[0] != "https://secure.example.com:443" {
+		t.Fatalf("expected [https://secure.example.com:443], got %v", result)
+	}
+}
+
+func TestAddrAppendMixed(t *testing.T) {
+	var result []string
+	result = addrAppend(result, "http://a.com:80")
+	result = addrAppend(result, "https://b.com:443")
+	if len(result) != 2 {
+		t.Fatalf("expected 2 addresses, got %d", len(result))
+	}
+	if result[0] != "http://a.com:80" {
+		t.Fatalf("expected first 'http://a.com:80', got %q", result[0])
+	}
+	if result[1] != "https://b.com:443" {
+		t.Fatalf("expected second 'https://b.com:443', got %q", result[1])
+	}
+}
+
+func TestParseFlagsWithTLSEnabled(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--tls-enabled=true"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if !v.TLSEnabled {
+		t.Fatal("expected TLSEnabled=true")
+	}
+}
+
+func TestParseFlagsWithTLSInsecureSkipVerify(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--tls-insecure-skip-verify=true"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if !v.TLSInsecureSkipVerify {
+		t.Fatal("expected TLSInsecureSkipVerify=true")
+	}
+}
+
+func TestParseFlagsWithTLSCAFile(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--tls-ca-file", "/path/to/ca.pem"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if v.TLSCAFile != "/path/to/ca.pem" {
+		t.Fatalf("expected TLSCAFile='/path/to/ca.pem', got %q", v.TLSCAFile)
+	}
+}
+
+func TestParseFlagsWithTLSServerName(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--tls-server-name", "example.com"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if v.TLSServerName != "example.com" {
+		t.Fatalf("expected TLSServerName='example.com', got %q", v.TLSServerName)
+	}
+}
+
+func TestParseUpstreamsWithHTTPS(t *testing.T) {
+	result := parseUpstreams("https://secure.example.com:443", nil)
+	if len(result) != 1 || result[0] != "https://secure.example.com:443" {
+		t.Fatalf("expected [https://secure.example.com:443], got %v", result)
+	}
+}
+
+func TestParseUpstreamsMixed(t *testing.T) {
+	result := parseUpstreams("http://a.com:80,https://b.com:443", nil)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 upstreams, got %d: %v", len(result), result)
+	}
+	if result[0] != "http://a.com:80" {
+		t.Fatalf("expected first='http://a.com:80', got %s", result[0])
+	}
+	if result[1] != "https://b.com:443" {
+		t.Fatalf("expected second='https://b.com:443', got %s", result[1])
+	}
+}
+
+func TestParseUpstreamsNoScheme(t *testing.T) {
+	result := parseUpstreams("example.com:8080", nil)
+	if len(result) != 1 || result[0] != "http://example.com:8080" {
+		t.Fatalf("expected [http://example.com:8080], got %v", result)
 	}
 }

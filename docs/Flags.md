@@ -34,11 +34,28 @@
 
 ## Флаги конфигурации прокси
 
-| Флаг             | Тип    | Default | Описание                                             |
-|------------------|--------|---------|------------------------------------------------------|
-| `--metrics-addr` | string | `:7070` | Адрес metrics-сервера (Prometheus `/metrics`)        |
-| `--proxy-addr`   | string | `:8080` | Адрес proxy-сервера                                  |
-| `--upstreams`    | string | `""`    | Список upstream-серверов через запятую (`host:port`) |
+| Флаг             | Тип    | Default | Описание                                                                            |
+|------------------|--------|---------|-------------------------------------------------------------------------------------|
+| `--metrics-addr` | string | `:7070` | Адрес metrics-сервера (Prometheus `/metrics`)                                       |
+| `--proxy-addr`   | string | `:8080` | Адрес proxy-сервера                                                                 |
+| `--upstreams`    | string | `""`    | Список upstream-серверов через запятую (`http://host:port` или `https://host:port`) |
+
+## Флаги TLS для upstream-соединений
+
+| Флаг                        | Тип    | Default | Описание                                              |
+|-----------------------------|--------|---------|-------------------------------------------------------|
+| `--tls-enabled`             | bool   | `false` | Включить TLS для upstream-соединений                  |
+| `--tls-insecure-skip-verify`| bool   | `false` | Пропускать проверку сертификатов upstream             |
+| `--tls-ca-file`             | string | `""`    | Путь к CA-сертификату для проверки upstream           |
+| `--tls-server-name`         | string | `""`    | Имя сервера для TLS (SNI)                             |
+
+## Флаги TLS для прокси-сервера
+
+| Флаг                                   | Тип    | Default | Описание                                               |
+|----------------------------------------|--------|---------|--------------------------------------------------------|
+| `--tls-server-enabled`                 | bool   | `false` | Включить TLS для прокси-сервера                        |
+| `--tls-server-certificate-pem-file`    | string | `""`    | Путь к PEM-файлу сертификата сервера                  |
+| `--tls-server-key-pem-file`            | string | `""`    | Путь к PEM-файлу ключа сервера                        |
 
 ## Пример запуска
 
@@ -61,4 +78,29 @@ go run ./cmd/proxy/ \
 
 # Режим без метрик (отключает metrics-сервер)
 go run ./cmd/proxy/ --metrics-addr ""
+
+# HTTPS upstream с TLS
+go run ./cmd/proxy/ \
+  --upstreams "https://secure.example.com:443" \
+  --tls-enabled \
+  --tls-insecure-skip-verify
+
+# Смешанные HTTP/HTTPS upstream
+go run ./cmd/proxy/ \
+  --upstreams "http://localhost:8080,https://secure.example.com:443" \
+  --tls-enabled
+
+# TLS upstream с CA-сертификатом
+go run ./cmd/proxy/ \
+  --upstreams "https://secure.example.com:443" \
+  --tls-enabled \
+  --tls-ca-file "/path/to/ca.pem" \
+  --tls-server-name "example.com"
+
+# TLS на стороне прокси-сервера
+go run ./cmd/proxy/ \
+  --tls-server-enabled \
+  --tls-server-certificate-pem-file "/path/to/cert.pem" \
+  --tls-server-key-pem-file "/path/to/key.pem" \
+  --tls-server-name "example.com"
 ```

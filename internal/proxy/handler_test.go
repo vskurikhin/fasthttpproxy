@@ -82,8 +82,8 @@ func TestResolveUpstreamSuccess(t *testing.T) {
 	if !ok {
 		t.Fatal("expected true")
 	}
-	if h.upstreamAddress != "example.com:8080" {
-		t.Fatalf("expected 'example.com:8080', got %q", h.upstreamAddress)
+	if h.upstreamAddress != "http://example.com:8080" {
+		t.Fatalf("expected 'http://example.com:8080', got %q", h.upstreamAddress)
 	}
 }
 

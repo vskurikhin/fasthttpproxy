@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+const (
+	PrefixHTTP  = "http://"
+	PrefixHTTPS = "https://"
+)
+
 //goland:noinspection GoLinter
 type Values struct {
 	Concurrency, MaxConnections     int
@@ -30,6 +35,15 @@ type Values struct {
 	ReadTimeout, WriteTimeout       time.Duration
 	ReduceMemoryUsage               bool
 	SecureErrorLogMessage           bool
+
+	// TLS configuration
+	TLSCAFile                   string // --tls-ca-file
+	TLSEnabled                  bool   // --tls-enabled
+	TLSInsecureSkipVerify       bool   // --tls-insecure-skip-verify
+	TLSServerCertificatePemFile string // --tls-server-certificate-pem-file
+	TLSServerEnabled            bool   // --tls-server-enabled
+	TLSServerKeyPemFile         string // --tls-server-key-pem-file
+	TLSServerName               string // --tls-server-name
 }
 
 // ParseFlags парсит флаги из os.Args[1:] и возвращает Values.
@@ -82,9 +96,23 @@ func ParseFlags() Values {
 	readTimeoutFlag := fs.Duration("read-timeout", 0, "Read timeout (0 = no timeout)")
 	reduceMemoryUsageFlag := fs.Bool("reduce-memory-usage", true, "Reduce memory usage mode")
 	secureErrorLogFlag := fs.Bool("secure-error-log", true, "Secure error log message")
-	upstreamsFlag := fs.String("upstreams", "", "Comma-separated list of upstream servers (host:port)")
+	upstreamsFlag := fs.String("upstreams", "",
+		"Comma-separated list of upstream servers with prefix"+
+			" (prefix://host:port) where prefix is http or https")
 	writeBufferSizeFlag := fs.Int("write-buffer-size", 0, "Write buffer size (0 = default in fastHTTP)")
 	writeTimeoutFlag := fs.Duration("write-timeout", 0, "Write timeout (0 = no timeout)")
+	tlsEnabledFlag := fs.Bool("tls-enabled", false, "Enable TLS for upstream connections")
+	tlsInsecureSkipVerifyFlag := fs.Bool("tls-insecure-skip-verify", false, "Skip TLS certificate verification")
+	tlsCAFileFlag := fs.String("tls-ca-file", "", "Path to CA certificate file for TLS verification")
+	tlsServerCertificatePemFileFlag := fs.String(
+		"tls-server-certificate-pem-file", "",
+		"TLS server certificate PEM file for TLS verification")
+	tlsServerNameFlag := fs.String("tls-server-name", "", "Server name for TLS (SNI)")
+	tlsServerKeyPemFileFlag := fs.String(
+		"tls-server-key-pem-file", "",
+		"TLS server private key PEM file for TLS verification")
+	tlsServerEnabledFlag := fs.Bool("tls-server-enabled", false, "Enable TLS for proxy server")
+
 	err := fs.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
@@ -116,6 +144,13 @@ func ParseFlags() Values {
 		ReadTimeout:                   *readTimeoutFlag,
 		ReduceMemoryUsage:             *reduceMemoryUsageFlag,
 		SecureErrorLogMessage:         *secureErrorLogFlag,
+		TLSCAFile:                     *tlsCAFileFlag,
+		TLSEnabled:                    *tlsEnabledFlag,
+		TLSInsecureSkipVerify:         *tlsInsecureSkipVerifyFlag,
+		TLSServerCertificatePemFile:   *tlsServerCertificatePemFileFlag,
+		TLSServerEnabled:              *tlsServerEnabledFlag,
+		TLSServerKeyPemFile:           *tlsServerKeyPemFileFlag,
+		TLSServerName:                 *tlsServerNameFlag,
 		Upstreams:                     upstreams,
 		WriteBufferSize:               *writeBufferSizeFlag,
 		WriteTimeout:                  *writeTimeoutFlag,
@@ -131,9 +166,22 @@ func parseUpstreams(raw string, upstreams []string) []string {
 
 func addrAppend(upstreams []string, addr string) []string {
 	addr = strings.TrimSpace(addr)
-	if _, err := url.Parse("https://" + addr); err != nil {
+
+	// Check if address has a scheme prefix
+
+	if strings.HasPrefix(addr, PrefixHTTP) || strings.HasPrefix(addr, PrefixHTTPS) {
+		if _, err := url.Parse(addr); err != nil {
+			log.Fatalf("invalid upstream address: %s", addr)
+		}
+		upstreams = append(upstreams, addr)
+		return upstreams
+	}
+
+	// No scheme — assume http:// (backward compatibility)
+	withScheme := PrefixHTTP + addr
+	if _, err := url.Parse(withScheme); err != nil {
 		log.Fatalf("invalid upstream address: %s", addr)
 	}
-	upstreams = append(upstreams, addr)
+	upstreams = append(upstreams, withScheme)
 	return upstreams
 }
