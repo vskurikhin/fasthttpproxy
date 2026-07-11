@@ -3,22 +3,19 @@ package proxy
 
 import (
 	"bufio"
-	"io"
 	"log"
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/vskurikhin/fasthttpproxy/internal/config"
 	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
 	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 	"github.com/vskurikhin/fasthttpproxy/internal/readers"
 	"github.com/vskurikhin/fasthttpproxy/internal/upstream"
 )
-
-const PipeCopyBufferSize = 64 * 1024
 
 var upstreamsObj = upstream.NewUpstreams(nil)
 
@@ -101,9 +98,9 @@ func (h *handler) resolveUpstream() bool {
 		return false
 	}
 	// Добавить схему по умолчанию, если не указана
-	if !strings.HasPrefix(h.upstreamAddress, "http://") &&
-		!strings.HasPrefix(h.upstreamAddress, "https://") {
-		h.upstreamAddress = "http://" + h.upstreamAddress
+	if !strings.HasPrefix(h.upstreamAddress, config.PrefixHTTP) &&
+		!strings.HasPrefix(h.upstreamAddress, config.PrefixHTTPS) {
+		h.upstreamAddress = config.PrefixHTTP + h.upstreamAddress
 	}
 	_, err := url.Parse(h.upstreamAddress)
 	if err != nil {
@@ -131,7 +128,8 @@ func (h *handler) acquireUpstreamConn() bool {
 // writeRequestHeaders отправляет заголовки запроса upstream.
 // При ошибке записи или сброса буфера возвращает 502 и завершает обработку.
 func (h *handler) writeRequestHeaders() bool {
-	bw := bufio.NewWriter(h.connection)
+	bw := pool.AcquireBufIOWriter(h.connection)
+	defer pool.ReleaseBufIOWriter(bw)
 
 	if err := h.request.Header.Write(bw); err != nil {
 		metrics.WriteErrors.Inc()
@@ -158,7 +156,7 @@ func (h *handler) writeRequestBody() bool {
 	}()
 
 	if h.ctx.Request.IsBodyStream() {
-		if err := PipeCopy(h.ctx.Request.BodyStream(), h.connection); err != nil {
+		if err := pool.PipeCopy(h.ctx.Request.BodyStream(), h.connection); err != nil {
 			log.Printf("failed to write request body: %s", err)
 			h.ctx.Error("upstream request body stream error: "+err.Error(), fasthttp.StatusBadGateway)
 			return false
@@ -190,7 +188,7 @@ func (h *handler) writeRequestBody() bool {
 // readResponseHeaders читает заголовки ответа upstream.
 // При ошибке чтения возвращает 502 и завершает обработку.
 func (h *handler) readResponseHeaders() bool {
-	h.bufIOReader = bufio.NewReader(h.connection)
+	h.bufIOReader = pool.AcquireBufIOReader(h.connection)
 
 	h.responseHeader = &fasthttp.ResponseHeader{}
 	if err := h.responseHeader.Read(h.bufIOReader); err != nil {
@@ -230,37 +228,8 @@ func (h *handler) streamResponseBody() {
 	// Передаём contentLen как remain:
 	//   contentLen >= 0 — PoolReader вернёт соединение в пул после чтения.
 	//   contentLen < 0  — PoolReader закроет соединение при EOF.
-	pr := readers.NewPoolReader(tr, h.upstreamAddress, h.connection, int64(contentLen))
+	pr := readers.NewPoolReader(tr, h.upstreamAddress, h.connection, int64(contentLen), func() {
+		pool.ReleaseBufIOReader(h.bufIOReader)
+	})
 	h.ctx.SetBodyStream(pr, contentLen)
-}
-
-// pipeCopyBufPool — пул буферов 64KB для PipeCopy (аналог copyBufPool в fasthttp).
-var pipeCopyBufPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, PipeCopyBufferSize)
-		return b
-	},
-}
-
-// PipeCopy копирует данные из src в dst, используя буфер 64KB из пула.
-// Возвращает ошибку при неудачной записи.
-func PipeCopy(src io.Reader, dst net.Conn) error {
-	poolBuf := pipeCopyBufPool.Get()
-	buf := poolBuf.([]byte)
-	defer pipeCopyBufPool.Put(poolBuf)
-
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, errWrite := dst.Write(buf[:n]); errWrite != nil {
-				return errWrite
-			}
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
 }

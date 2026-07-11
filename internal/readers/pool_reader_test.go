@@ -11,7 +11,7 @@ import (
 )
 
 func TestPoolReaderDelegatesRead(t *testing.T) {
-	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", &dummyConn{}, -1)
+	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", &dummyConn{}, -1, nil)
 
 	buf := make([]byte, 64)
 	n, err := pr.Read(buf)
@@ -24,7 +24,7 @@ func TestPoolReaderDelegatesRead(t *testing.T) {
 }
 
 func TestPoolReaderReturnsEOF(t *testing.T) {
-	pr := NewPoolReader(strings.NewReader(""), "example.com:8080", &dummyConn{}, -1)
+	pr := NewPoolReader(strings.NewReader(""), "example.com:8080", &dummyConn{}, -1, nil)
 
 	buf := make([]byte, 64)
 	_, err := pr.Read(buf)
@@ -35,7 +35,7 @@ func TestPoolReaderReturnsEOF(t *testing.T) {
 
 func TestPoolReaderReturnsError(t *testing.T) {
 	expectedErr := errors.New("read error")
-	pr := NewPoolReader(&errReader{err: expectedErr}, "example.com:8080", &dummyConn{}, -1)
+	pr := NewPoolReader(&errReader{err: expectedErr}, "example.com:8080", &dummyConn{}, -1, nil)
 
 	buf := make([]byte, 64)
 	_, err := pr.Read(buf)
@@ -45,7 +45,7 @@ func TestPoolReaderReturnsError(t *testing.T) {
 }
 
 func TestPoolReaderMultipleReads(t *testing.T) {
-	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", &dummyConn{}, -1)
+	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", &dummyConn{}, -1, nil)
 
 	buf := make([]byte, 2)
 	n, err := pr.Read(buf)
@@ -86,7 +86,7 @@ func TestPoolReaderContentLengthReturnsToPool(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, 5)
+	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, 5, nil)
 
 	buf := make([]byte, 64)
 	n, err := pr.Read(buf)
@@ -114,7 +114,7 @@ func TestPoolReaderContentLengthPartialRead(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, 5)
+	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, 5, nil)
 
 	buf := make([]byte, 2)
 	n, err := pr.Read(buf)
@@ -157,7 +157,7 @@ func TestPoolReaderContentLengthExactLimit(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(strings.NewReader("abc"), "example.com:8080", conn, 3)
+	pr := NewPoolReader(strings.NewReader("abc"), "example.com:8080", conn, 3, nil)
 
 	buf := make([]byte, 64)
 	n, err := pr.Read(buf)
@@ -186,7 +186,7 @@ func TestPoolReaderChunkedClosesOnEOF(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(strings.NewReader(""), "example.com:8080", conn, -1)
+	pr := NewPoolReader(strings.NewReader(""), "example.com:8080", conn, -1, nil)
 
 	buf := make([]byte, 64)
 	_, err := pr.Read(buf)
@@ -204,7 +204,7 @@ func TestPoolReaderChunkedClosesOnError(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(&errReader{err: io.ErrUnexpectedEOF}, "example.com:8080", conn, -1)
+	pr := NewPoolReader(&errReader{err: io.ErrUnexpectedEOF}, "example.com:8080", conn, -1, nil)
 
 	buf := make([]byte, 64)
 	_, err := pr.Read(buf)
@@ -222,7 +222,7 @@ func TestPoolReaderChunkedReadThenEOF(t *testing.T) {
 	var closed atomic.Bool
 	conn := &closeTrackConn{closeFn: func() { closed.Store(true) }}
 
-	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, -1)
+	pr := NewPoolReader(strings.NewReader("hello"), "example.com:8080", conn, -1, nil)
 
 	buf := make([]byte, 64)
 	n, err := pr.Read(buf)

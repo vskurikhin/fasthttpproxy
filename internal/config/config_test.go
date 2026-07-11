@@ -328,6 +328,28 @@ func TestParseFlagsWithWriteTimeout(t *testing.T) {
 	}
 }
 
+func TestParseFlagsWithIOBuffersSize(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--io-buffers-size", "8192"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if v.IOBuffersSize != 8192 {
+		t.Fatalf("expected 8192, got %d", v.IOBuffersSize)
+	}
+}
+
+func TestParseFlagsWithCopyBuffersSize(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--copy-buffers-size", "131072"}
+	defer func() { os.Args = origArgs }()
+
+	v := ParseFlags()
+	if v.CopyBuffersSize != 131072 {
+		t.Fatalf("expected 131072, got %d", v.CopyBuffersSize)
+	}
+}
+
 func TestParseFlagsAllDefaults(t *testing.T) {
 	origArgs := os.Args
 	os.Args = []string{"test"}
