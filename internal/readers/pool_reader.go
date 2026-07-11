@@ -19,7 +19,8 @@ type PoolReader struct {
 	upstreamAddr string
 	connection   net.Conn
 	returned     bool
-	remain       int64 // сколько ещё байт прочитать; < 0 = читать до EOF
+	remain       int64  // сколько ещё байт прочитать; < 0 = читать до EOF
+	onDone       func() // вызывается после возврата/закрытия соединения
 }
 
 // NewPoolReader создаёт PoolReader, оборачивающий заданный io.Reader.
@@ -27,12 +28,15 @@ type PoolReader struct {
 // Параметр remain задаёт стратегию возврата соединения:
 // положительное значение — лимит байт для Content-Length;
 // отрицательное — чтение до EOF (chunked/identity), при EOF соединение закрывается.
-func NewPoolReader(r io.Reader, upstreamAddr string, conn net.Conn, remain int64) *PoolReader {
+//
+// cleanup — функция, вызываемая после завершения чтения (освобождение ресурсов).
+func NewPoolReader(r io.Reader, upstreamAddr string, conn net.Conn, remain int64, cleanup func()) *PoolReader {
 	return &PoolReader{
 		reader:       r,
 		upstreamAddr: upstreamAddr,
 		connection:   conn,
 		remain:       remain,
+		onDone:       cleanup,
 	}
 }
 
@@ -65,12 +69,18 @@ func (pr *PoolReader) readWithLimit(p []byte) (int, error) {
 	if pr.remain <= 0 && !pr.returned {
 		pr.returned = true
 		pool.ReleaseUpstreamConnection(pr.upstreamAddr, pr.connection)
+		if pr.onDone != nil {
+			pr.onDone()
+		}
 	}
 
 	// Ошибка до достижения лимита — всё равно возвращаем (коннект мог умереть)
 	if err != nil && !pr.returned {
 		pr.returned = true
 		pool.ReleaseUpstreamConnection(pr.upstreamAddr, pr.connection)
+		if pr.onDone != nil {
+			pr.onDone()
+		}
 	}
 
 	// Если лимит исчерпан и нет ошибки — ведём себя как io.LimitReader:
@@ -89,6 +99,9 @@ func (pr *PoolReader) readUntilEOF(p []byte) (int, error) {
 	if !pr.returned && err != nil {
 		pr.returned = true
 		pool.CloseAndDropUpstreamConnection(pr.upstreamAddr, pr.connection)
+		if pr.onDone != nil {
+			pr.onDone()
+		}
 	}
 
 	return n, err

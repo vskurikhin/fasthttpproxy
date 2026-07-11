@@ -36,6 +36,10 @@ type Values struct {
 	ReduceMemoryUsage               bool
 	SecureErrorLogMessage           bool
 
+	// Pool buffer sizes
+	IOBuffersSize   int // --io-buffers-size, размер буфера для bufio.Writer/Reader (по умолчанию 4096)
+	CopyBuffersSize int // --copy-buffers-size, размер буфера для PipeCopy (по умолчанию 65536)
+
 	// TLS configuration
 	TLSCAFile                   string // --tls-ca-file
 	TLSEnabled                  bool   // --tls-enabled
@@ -73,6 +77,9 @@ type Values struct {
 //	--upstreams                    список upstream-серверов через запятую (host:port)
 //	--write-buffer-size            размер буфера записи (по умолчанию 0 = по умолчанию в fastHTTP)
 //	--write-timeout                таймаут записи (по умолчанию 0 = по умолчанию в fastHTTP)
+//
+//	--io-buffers-size              размер буфера для bufio.Writer/Reader (по умолчанию 4096, минимум 64)
+//	--copy-buffers-size            размер буфера для PipeCopy (по умолчанию 65536, минимум 256)
 func ParseFlags() Values {
 	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
 	concurrencyFlag := fs.Int("concurrency", 256*1024, "Max concurrent requests to proxy (fasthttp.DefaultConcurrency)")
@@ -111,6 +118,8 @@ func ParseFlags() Values {
 	tlsServerKeyPemFileFlag := fs.String(
 		"tls-server-key-pem-file", "",
 		"TLS server private key PEM file for TLS verification")
+	ioBuffersSizeFlag := fs.Int("io-buffers-size", 4096, "Buffer size for bufio.Writer/Reader (default 4096, minimum 64)")
+	copyBuffersSizeFlag := fs.Int("copy-buffers-size", 65536, "Buffer size for PipeCopy (default 65536, minimum 256)")
 	tlsServerEnabledFlag := fs.Bool("tls-server-enabled", false, "Enable TLS for proxy server")
 
 	err := fs.Parse(os.Args[1:])
@@ -144,6 +153,8 @@ func ParseFlags() Values {
 		ReadTimeout:                   *readTimeoutFlag,
 		ReduceMemoryUsage:             *reduceMemoryUsageFlag,
 		SecureErrorLogMessage:         *secureErrorLogFlag,
+		IOBuffersSize:                 *ioBuffersSizeFlag,
+		CopyBuffersSize:               *copyBuffersSizeFlag,
 		TLSCAFile:                     *tlsCAFileFlag,
 		TLSEnabled:                    *tlsEnabledFlag,
 		TLSInsecureSkipVerify:         *tlsInsecureSkipVerifyFlag,

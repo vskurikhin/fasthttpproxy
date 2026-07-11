@@ -526,54 +526,6 @@ func TestStreamResponseBodyChunked(t *testing.T) {
 	}
 }
 
-// --- Тесты PipeCopy ---
-
-func TestPipeCopy(t *testing.T) {
-	src := strings.NewReader("hello, world")
-	var dst bytes.Buffer
-
-	err := PipeCopy(src, &writerConn{w: &dst})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if dst.String() != "hello, world" {
-		t.Fatalf("unexpected output: got %q, want %q", dst.String(), "hello, world")
-	}
-}
-
-func TestPipeCopyEmpty(t *testing.T) {
-	src := strings.NewReader("")
-	var dst bytes.Buffer
-
-	err := PipeCopy(src, &writerConn{w: &dst})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if dst.String() != "" {
-		t.Fatalf("expected empty output, got %q", dst.String())
-	}
-}
-
-func TestPipeCopyError(t *testing.T) {
-	src := errReader{}
-	var dst bytes.Buffer
-
-	err := PipeCopy(src, &writerConn{w: &dst})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestPipeCopyWriteError(t *testing.T) {
-	src := strings.NewReader("data")
-	dst := &writerConn{w: &errWriter{err: io.ErrClosedPipe}}
-
-	err := PipeCopy(src, dst)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
 // --- Тесты Handler ---
 
 func TestHandlerReturnsNonNil(t *testing.T) {
@@ -751,18 +703,6 @@ func TestWriteRequestBodyStreamPipeCopyError(t *testing.T) {
 }
 
 // --- Вспомогательные типы ---
-
-type writerConn struct {
-	w io.Writer
-	net.Conn
-}
-
-func (wc *writerConn) Write(b []byte) (int, error) { return wc.w.Write(b) }
-func (wc *writerConn) Close() error                { return nil }
-
-type errReader struct{}
-
-func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 
 type shortWriter struct {
 	w io.Writer

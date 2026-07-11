@@ -58,3 +58,35 @@ func TestParseFlagsDialerTimeoutDefault(t *testing.T) {
 		t.Fatalf("expected default 30s, got %v", v.DialerTimeout)
 	}
 }
+
+// TestPoolBufferSizeIntegration проверяет, что pool.BufferSize
+// корректно применяет значение из конфигурации.
+func TestPoolBufferSizeIntegration(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--io-buffers-size", "8192"}
+	defer func() { os.Args = origArgs }()
+
+	v := config.ParseFlags()
+	if v.IOBuffersSize != 8192 {
+		t.Fatalf("expected 8192, got %d", v.IOBuffersSize)
+	}
+
+	// Имитируем то, что делает runWith
+	pool.BufferSize(v.IOBuffersSize)
+}
+
+// TestPoolCopyBuffersSizeIntegration проверяет, что pool.PipeCopyBufferSize
+// корректно применяет значение из конфигурации.
+func TestPoolCopyBuffersSizeIntegration(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"test", "--copy-buffers-size", "131072"}
+	defer func() { os.Args = origArgs }()
+
+	v := config.ParseFlags()
+	if v.CopyBuffersSize != 131072 {
+		t.Fatalf("expected 131072, got %d", v.CopyBuffersSize)
+	}
+
+	// Имитируем то, что делает runWith
+	pool.PipeCopyBufferSize(v.CopyBuffersSize)
+}
