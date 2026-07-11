@@ -6,6 +6,17 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
+
+	"github.com/vskurikhin/fasthttpproxy/internal/metrics"
+)
+
+type MetricTrend int
+
+const (
+	_    MetricTrend = iota*2 - 3
+	Down             // -1
+	Up               // 1
 )
 
 // defaultBufSize — размер буфера по умолчанию для bufio.Writer и bufio.Reader.
@@ -19,7 +30,7 @@ import (
 //
 // Пример:
 //
-//	pool.SetDefaultBufSize(8192)
+//	pool.BufferSize(8192)
 var defaultBufSize = 4096
 
 // pipeCopyBufferSize — размер буфера для PipeCopy (64KB).
@@ -39,11 +50,32 @@ var defaultBufSize = 4096
 //	pool.PipeCopyBufferSize(128 * 1024) // 128KB
 var pipeCopyBufferSize = 64 * 1024
 
-// bufIOWriterPool — пул bufio.Writer для writeRequestHeaders (аналог fasthttp).
-var bufIOWriterPool sync.Pool
+// bufIOReaderPoolInUse — количество bufio.Reader, currently acquired (точное).
+var bufIOReaderPoolInUse atomic.Int64
+
+// bufIOReaderPoolIdle — количество bufio.Reader, idle в sync.Pool (приблизительное,
+// GC может сбросить пул без учёта).
+var bufIOReaderPoolIdle atomic.Int64
 
 // bufIOReaderPool — пул bufio.Reader для readResponseHeaders (аналог fasthttp).
 var bufIOReaderPool sync.Pool
+
+// bufIOWriterPoolInUse — количество bufio.Writer, currently acquired (точное).
+var bufIOWriterPoolInUse atomic.Int64
+
+// bufIOWriterPoolIdle — количество bufio.Writer, idle в sync.Pool (приблизительное,
+// GC может сбросить пул без учёта).
+var bufIOWriterPoolIdle atomic.Int64
+
+// bufIOWriterPool — пул bufio.Writer для writeRequestHeaders (аналог fasthttp).
+var bufIOWriterPool sync.Pool
+
+// pipeCopyBufPoolInUse — количество буферов, currently acquired (точное).
+var pipeCopyBufPoolInUse atomic.Int64
+
+// pipeCopyBufPoolIdle — количество буферов, idle в sync.Pool (приблизительное,
+// GC может сбросить пул без учёта).
+var pipeCopyBufPoolIdle atomic.Int64
 
 // pipeCopyBufPool — пул буферов 64KB для PipeCopy (аналог copyBufPool в fasthttp).
 var pipeCopyBufPool = sync.Pool{
@@ -68,6 +100,66 @@ func BufferSize(n int) {
 	defaultBufSize = n
 }
 
+// AcquireBufIOReader возвращает *bufio.Reader из пула или создаёт новый
+// с буфером размера defaultBufSize. Reader сбрасывается на r.
+//
+// Метрики:
+//   - bufIOReaderPoolInUse — увеличивается при каждом вызове
+//   - bufIOReaderPoolIdle — уменьшается при успешном Get (v != nil)
+//     Значения публикуются в Prometheus-gauges BufIOReaderPoolInUse и BufIOReaderPoolIdle.
+func AcquireBufIOReader(r io.Reader) *bufio.Reader {
+	v := bufIOReaderPool.Get()
+	if v == nil {
+		br := bufio.NewReaderSize(r, defaultBufSize)
+		metricsBufIOReaderNew()
+
+		return br
+	}
+	br := v.(*bufio.Reader)
+	br.Reset(r)
+	metricsBufIOReader(Up)
+
+	return br
+}
+
+// ReleaseBufIOReader возвращает br обратно в пул для повторного использования.
+func ReleaseBufIOReader(br *bufio.Reader) {
+	bufIOReaderPool.Put(br)
+	metricsBufIOReader(Down)
+}
+
+// AcquireBufIOWriter возвращает *bufio.Writer из пула или создаёт новый
+// с буфером размера defaultBufSize. Writer сбрасывается на w.
+//
+// Метрики:
+//   - bufIOWriterPoolInUse — увеличивается при каждом вызове
+//   - bufIOWriterPoolIdle — уменьшается при успешном Get (v != nil)
+//     Значения публикуются в Prometheus-gauges BufIOWriterPoolInUse и BufIOWriterPoolIdle.
+func AcquireBufIOWriter(w io.Writer) *bufio.Writer {
+	v := bufIOWriterPool.Get()
+	if v == nil {
+		bw := bufio.NewWriterSize(w, defaultBufSize)
+		metricsBufIOWriterNew()
+
+		return bw
+	}
+	bw := v.(*bufio.Writer)
+	bw.Reset(w)
+	metricsBufIOWriter(Up)
+
+	return bw
+}
+
+// ReleaseBufIOWriter возвращает bw обратно в пул для повторного использования.
+//
+// Метрики:
+//   - bufIOWriterPoolInUse — уменьшается
+//   - bufIOWriterPoolIdle — увеличивается
+func ReleaseBufIOWriter(bw *bufio.Writer) {
+	bufIOWriterPool.Put(bw)
+	metricsBufIOWriter(Down)
+}
+
 // PipeCopyBufferSize устанавливает размер буфера для PipeCopy.
 // По умолчанию — 64 * 1024 (64KB). Минимальное допустимое значение — 256.
 // При передаче значения меньше 256 функция логирует предупреждение и
@@ -89,48 +181,27 @@ func PipeCopyBufferSize(n int) {
 			return b
 		},
 	}
-}
-
-// AcquireBufIOWriter возвращает *bufio.Writer из пула или создаёт новый
-// с буфером размера defaultBufSize. Writer сбрасывается на w.
-func AcquireBufIOWriter(w io.Writer) *bufio.Writer {
-	v := bufIOWriterPool.Get()
-	if v == nil {
-		return bufio.NewWriterSize(w, defaultBufSize)
-	}
-	bw := v.(*bufio.Writer)
-	bw.Reset(w)
-	return bw
-}
-
-// ReleaseBufIOWriter возвращает bw обратно в пул для повторного использования.
-func ReleaseBufIOWriter(bw *bufio.Writer) {
-	bufIOWriterPool.Put(bw)
-}
-
-// AcquireBufIOReader возвращает *bufio.Reader из пула или создаёт новый
-// с буфером размера defaultBufSize. Reader сбрасывается на r.
-func AcquireBufIOReader(r io.Reader) *bufio.Reader {
-	v := bufIOReaderPool.Get()
-	if v == nil {
-		return bufio.NewReaderSize(r, defaultBufSize)
-	}
-	br := v.(*bufio.Reader)
-	br.Reset(r)
-	return br
-}
-
-// ReleaseBufIOReader возвращает br обратно в пул для повторного использования.
-func ReleaseBufIOReader(br *bufio.Reader) {
-	bufIOReaderPool.Put(br)
+	// Старые буферы в пуле более невалидны — сбрасываем idle
+	pipeCopyBufPoolIdle.Store(0)
+	metrics.PipeCopyBufPoolIdle.Set(0)
 }
 
 // PipeCopy копирует данные из src в dst, используя буфер 64KB из пула.
 // Возвращает ошибку при неудачной записи.
+//
+// Метрики:
+//   - pipeCopyBufPoolInUse — увеличивается при каждом Get, уменьшается при Put
+//   - pipeCopyBufPoolIdle — уменьшается при успешном Get (v != nil), увеличивается при Put
+//     Значения публикуются в Prometheus-gauges PipeCopyBufPoolInUse и PipeCopyBufPoolIdle.
 func PipeCopy(src io.Reader, dst net.Conn) error {
 	poolBuf := pipeCopyBufPool.Get()
 	buf := poolBuf.([]byte)
-	defer pipeCopyBufPool.Put(poolBuf)
+
+	metricsUpPipeCopy()
+	defer func() {
+		pipeCopyBufPool.Put(poolBuf)
+		metricsDownPipeCopy()
+	}()
 
 	for {
 		n, err := src.Read(buf)
@@ -146,4 +217,56 @@ func PipeCopy(src io.Reader, dst net.Conn) error {
 			return err
 		}
 	}
+}
+
+func metricsBufIOReaderNew() {
+	bufIOReaderPoolInUse.Add(1)
+	metrics.BufIOReaderPoolInUse.Set(float64(bufIOReaderPoolInUse.Load()))
+	metrics.BufIOReaderPoolIdle.Set(float64(bufIOReaderPoolIdle.Load()))
+}
+
+// metricsBufIOReader Метрики:
+//   - bufIOReaderPoolInUse — увеличивается
+//   - bufIOReaderPoolIdle — уменьшается
+func metricsBufIOReader(value MetricTrend) {
+	bufIOReaderPoolInUse.Add(1 * int64(value))
+	bufIOReaderPoolIdle.Add(-1 * int64(value))
+	metrics.BufIOReaderPoolInUse.Set(float64(bufIOReaderPoolInUse.Load()))
+	metrics.BufIOReaderPoolIdle.Set(float64(bufIOReaderPoolIdle.Load()))
+}
+
+func metricsBufIOWriterNew() {
+	bufIOWriterPoolInUse.Add(1)
+	metrics.BufIOWriterPoolInUse.Set(float64(bufIOWriterPoolInUse.Load()))
+	metrics.BufIOWriterPoolIdle.Set(float64(bufIOWriterPoolIdle.Load()))
+}
+
+// metricsBufIOReader Метрики:
+//   - bufIOReaderPoolInUse — увеличивается
+//   - bufIOReaderPoolIdle — уменьшается
+func metricsBufIOWriter(value MetricTrend) {
+	bufIOReaderPoolInUse.Add(1 * int64(value))
+	bufIOReaderPoolIdle.Add(-1 * int64(value))
+	metrics.BufIOReaderPoolInUse.Set(float64(bufIOReaderPoolInUse.Load()))
+	metrics.BufIOReaderPoolIdle.Set(float64(bufIOReaderPoolIdle.Load()))
+}
+
+func metricsDownPipeCopy() {
+	pipeCopyBufPoolInUse.Add(-1)
+	pipeCopyBufPoolIdle.Add(1)
+	metrics.PipeCopyBufPoolInUse.Set(float64(pipeCopyBufPoolInUse.Load()))
+	metrics.PipeCopyBufPoolIdle.Set(float64(pipeCopyBufPoolIdle.Load()))
+}
+
+func metricsUpPipeCopy() {
+	pipeCopyBufPoolInUse.Add(1)
+
+	// Если объект взят из пула (не новый), уменьшаем idle
+	// Если poolBuf был создан New-функцией, idle не меняется.
+	// Мы не можем отличить Get() нового от переиспользованного, поэтому
+	// idle — приблизительное значение (GC может сбросить пул).
+	pipeCopyBufPoolIdle.Add(-1)
+
+	metrics.PipeCopyBufPoolInUse.Set(float64(pipeCopyBufPoolInUse.Load()))
+	metrics.PipeCopyBufPoolIdle.Set(float64(pipeCopyBufPoolIdle.Load()))
 }

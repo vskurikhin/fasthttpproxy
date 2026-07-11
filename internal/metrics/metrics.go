@@ -7,6 +7,36 @@ import (
 )
 
 var (
+	BufIOReaderPoolInUse = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_bufio_reader_pool_in_use",
+		Help: "Number of bufio.Reader objects currently acquired",
+	})
+
+	BufIOReaderPoolIdle = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_bufio_reader_pool_idle",
+		Help: "Number of bufio.Reader objects idle in the pool",
+	})
+
+	BufIOWriterPoolInUse = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_bufio_writer_pool_in_use",
+		Help: "Number of bufio.Writer objects currently acquired",
+	})
+
+	BufIOWriterPoolIdle = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_bufio_writer_pool_idle",
+		Help: "Number of bufio.Writer objects idle in the pool",
+	})
+
+	PipeCopyBufPoolInUse = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_pipe_copy_buf_pool_in_use",
+		Help: "Number of pipe copy buffers currently acquired",
+	})
+
+	PipeCopyBufPoolIdle = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "fasthttp_proxy_pipe_copy_buf_pool_idle",
+		Help: "Number of pipe copy buffers idle in the pool",
+	})
+
 	BufIOWriterFlushErrors = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "fasthttp_proxy_bufio_writer_flush_errors_total",
 		Help: "Total number of bufio Writer flush errors",
