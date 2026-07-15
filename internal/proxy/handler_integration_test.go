@@ -104,6 +104,76 @@ func TestIntegrationUpstreamContentLengthUnderread(t *testing.T) {
 	}
 }
 
+// TestIntegrationContentLengthUnderreadZeroBody проверяет, что при under-read
+// без единого байта тела (Content-Length: 100, 0 байт) прокси корректно
+// устанавливает body stream и не падает.
+//
+// Подтип A2: upstream отправляет заголовки, закрывает без тела.
+func TestIntegrationContentLengthUnderreadZeroBody(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultContentLengthUnderreadZeroBody)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Читаем тело — может быть пустым или частичным
+	_ = ctx.Response.Body()
+}
+
+// TestIntegrationContentLengthUnderreadSevere проверяет, что при under-read
+// почти в конце (Content-Length: 100, 99 байт тела) прокси корректно
+// устанавливает body stream и читает частичное тело.
+//
+// Подтип A3: upstream отправляет 99 байт из 100.
+func TestIntegrationContentLengthUnderreadSevere(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultContentLengthUnderread99)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Читаем тело — должно быть меньше 100 байт
+	body := ctx.Response.Body()
+	if len(body) >= 100 {
+		t.Fatalf("expected body < 100 bytes (severe underread), got %d", len(body))
+	}
+	if len(body) == 0 {
+		t.Fatal("expected some body bytes for severe underread")
+	}
+}
+
 // TestIntegrationUpstreamChunkedDisconnect проверяет, что при chunked-ответе
 // без терминатора прокси корректно устанавливает body stream и не падает.
 //

@@ -123,6 +123,8 @@ const (
 	FaultClientDisconnectRequest                         // upstream получает неполное тело запроса (клиент оборвал POST)
 	FaultClientDisconnectResponseContentLength           // upstream отправляет полный ответ с Content-Length; прокси начинает стриминг, клиент обрывает
 	FaultClientDisconnectResponseChunked                 // upstream отправляет chunked-ответ; прокси начинает стриминг, клиент обрывает
+	FaultContentLengthUnderreadZeroBody                  // Content-Length: 100, 0 байт тела, закрытие
+	FaultContentLengthUnderread99                        // Content-Length: 100, 99 байт тела, закрытие
 )
 
 // startFaultyUpstream запускает TCP-сервер, который симулирует заданный сбой.
@@ -161,6 +163,17 @@ func startFaultyUpstream(t *testing.T, fault FaultType) net.Listener {
 					_, _ = bw.WriteString("5\r\nhello\r\n")
 					_ = bw.Flush()
 					// закрываем без 0\r\n\r\n
+				case FaultContentLengthUnderreadZeroBody:
+					bw := bufio.NewWriter(c)
+					_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+					_ = bw.Flush()
+					// закрываем — тело пустое, заголовки говорят 100 байт
+				case FaultContentLengthUnderread99:
+					bw := bufio.NewWriter(c)
+					_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n")
+					_, _ = bw.WriteString(strings.Repeat("x", 99))
+					_ = bw.Flush()
+					// закрываем — тело 99 из 100
 				}
 			}(conn)
 		}

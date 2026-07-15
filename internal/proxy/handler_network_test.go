@@ -62,6 +62,99 @@ func TestHandlerUpstreamPartialHeaders(t *testing.T) {
 	}
 }
 
+// --- Варианты Content-Length under-read (A1, A2, A3, B) ---
+
+// TestHandlerContentLengthUnderreadVariants проверяет поведение прокси для
+// разных вариантов under-read: zero body, severe under-read (99 из 100),
+// и under-read через FaultContentLengthUnderread (50 из 100).
+//
+// Сценарий: для каждого варианта upstream отправляет полные заголовки с
+// Content-Length: 100, но меньше байт тела, затем закрывает.
+// handle() устанавливает body stream; ошибка возникает при чтении тела.
+func TestHandlerContentLengthUnderreadVariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		fault  FaultType
+		verify func(*testing.T, *fasthttp.RequestCtx)
+	}{
+		{
+			name:  "underread_50_of_100",
+			fault: FaultContentLengthUnderread,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+				body := ctx.Response.Body()
+				if len(body) >= 100 {
+					t.Fatalf("expected body < 100 bytes, got %d", len(body))
+				}
+				if len(body) == 0 {
+					t.Fatal("expected some body bytes")
+				}
+			},
+		},
+		{
+			name:  "underread_zero_body",
+			fault: FaultContentLengthUnderreadZeroBody,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+				body := ctx.Response.Body()
+				if len(body) >= 100 {
+					t.Fatalf("expected body < 100 bytes (zero body), got %d", len(body))
+				}
+				// Может быть пустым или частичным — fasthttp может отбросить пустой поток
+			},
+		},
+		{
+			name:  "underread_99_of_100",
+			fault: FaultContentLengthUnderread99,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+				body := ctx.Response.Body()
+				if len(body) >= 100 {
+					t.Fatalf("expected body < 100 bytes (severe underread), got %d", len(body))
+				}
+				if len(body) == 0 {
+					t.Fatal("expected some body bytes for severe underread")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ResetUpstreams()
+			ln := startFaultyUpstream(t, tt.fault)
+			defer ln.Close()
+
+			var ctx fasthttp.RequestCtx
+			var req fasthttp.Request
+			req.Header.SetMethod("GET")
+			req.SetRequestURI("/")
+			req.Header.SetHost(ln.Addr().String())
+			ctx.Init(&req, nil, nil)
+
+			handler := Handler([]string{ln.Addr().String()})
+			handler(&ctx)
+
+			tt.verify(t, &ctx)
+		})
+	}
+}
+
 // --- Подтип B1: Content-Length under-read ---
 
 // TestHandlerUpstreamContentLengthUnderread проверяет поведение прокси, когда
