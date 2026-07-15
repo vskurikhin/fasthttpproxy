@@ -125,6 +125,8 @@ const (
 	FaultClientDisconnectResponseChunked                 // upstream отправляет chunked-ответ; прокси начинает стриминг, клиент обрывает
 	FaultContentLengthUnderreadZeroBody                  // Content-Length: 100, 0 байт тела, закрытие
 	FaultContentLengthUnderread99                        // Content-Length: 100, 99 байт тела, закрытие
+	FaultChunkedInvalidSize                              // chunked: неверный hex размер чанка (GG)
+	FaultChunkedBrokenTrailer                            // chunked: мусор после 0\r\n
 )
 
 // startFaultyUpstream запускает TCP-сервер, который симулирует заданный сбой.
@@ -174,6 +176,18 @@ func startFaultyUpstream(t *testing.T, fault FaultType) net.Listener {
 					_, _ = bw.WriteString(strings.Repeat("x", 99))
 					_ = bw.Flush()
 					// закрываем — тело 99 из 100
+				case FaultChunkedInvalidSize:
+					bw := bufio.NewWriter(c)
+					_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+					_, _ = bw.WriteString("GG\r\nhello\r\n0\r\n\r\n")
+					_ = bw.Flush()
+					// GG — не hex, fasthttp не может распарсить размер чанка
+				case FaultChunkedBrokenTrailer:
+					bw := bufio.NewWriter(c)
+					_, _ = bw.WriteString("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+					_, _ = bw.WriteString("5\r\nhello\r\n0\r\nGARBAGE\r\n")
+					_ = bw.Flush()
+					// мусор после терминатора
 				}
 			}(conn)
 		}
@@ -230,30 +244,6 @@ func startFaultyClientUpstream(t *testing.T, fault FaultType) net.Listener {
 					_, _ = bw.WriteString("5\r\nhello\r\n")
 					_ = bw.Flush()
 				}
-			}(conn)
-		}
-	}()
-	return ln
-}
-
-// startPartialUpstream отправляет data и закрывает соединение.
-func startPartialUpstream(t *testing.T, data string) net.Listener {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func(c net.Conn) {
-				defer c.Close()
-				bw := bufio.NewWriter(c)
-				_, _ = bw.WriteString(data)
-				_ = bw.Flush()
 			}(conn)
 		}
 	}()
