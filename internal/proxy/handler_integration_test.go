@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 )
 
 // --- Интеграционные тесты: Upstream disconnect mid-response ---
@@ -242,6 +245,89 @@ func TestIntegrationClientDisconnectResponseChunked(t *testing.T) {
 
 	if ctx2.Response.StatusCode() != 200 {
 		t.Fatalf("second request: expected 200, got %d", ctx2.Response.StatusCode())
+	}
+}
+
+// --- Интеграционные тесты: Dial timeout with pool full ---
+
+// TestIntegrationPoolFull проверяет, что при переполненном пуле через полный
+// цикл Handler прокси возвращает 502.
+//
+// Сценарий: заполняем пул напрямую, затем Handler получает ErrDialTimeout → 502.
+func TestIntegrationPoolFull(t *testing.T) {
+	restore := pool.SetMaxUpstreamConnectionsForTest(t, 2)
+	defer restore()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, e := ln.Accept()
+			if e != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	addr := ln.Addr().String()
+	poolAddr := "http://" + addr
+
+	// Заполняем пул — 2 соединения для того же адреса, что использует handler
+	var conns []net.Conn
+	for i := 0; i < 2; i++ {
+		c, err := pool.AcquireUpstreamConnection(poolAddr)
+		if err != nil {
+			t.Fatalf("unexpected dial error at %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+
+	// Третий запрос через Handler — пул переполнен
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(addr)
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{poolAddr})
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502 when pool full, got %d", ctx.Response.StatusCode())
+	}
+
+	for _, c := range conns {
+		pool.ReleaseUpstreamConnection(poolAddr, c)
+	}
+}
+
+// TestIntegrationDialTimeout проверяет, что при таймауте dial-функции через
+// полный цикл Handler прокси возвращает 502.
+//
+// Сценарий: устанавливаем кастомную dial-функцию с таймаутом, вызываем Handler.
+func TestIntegrationDialTimeout(t *testing.T) {
+	restore := pool.SetCustomDialForTest(t, func(addr string) (net.Conn, error) {
+		time.Sleep(50 * time.Millisecond)
+		return nil, fasthttp.ErrDialTimeout
+	})
+	defer restore()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("127.0.0.1:1")
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
 	}
 }
 

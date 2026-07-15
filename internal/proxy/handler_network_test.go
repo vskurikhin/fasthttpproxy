@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"io"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
+	"github.com/vskurikhin/fasthttpproxy/internal/pool"
 )
 
 // --- Подтип A: разрыв до/во время заголовков ---
@@ -323,4 +326,192 @@ func TestHandlerClientDisconnectResponseChunked(t *testing.T) {
 	// Пытаемся прочитать тело — может быть пустым, если fasthttp отбросил неполный чанк
 	body := ctx.Response.Body()
 	_ = body // может быть пустым — это допустимо для неполного chunked
+}
+
+// --- Подтип A: Pool full (soft reject) ---
+
+// TestAcquireUpstreamConnPoolFull проверяет, что при переполненном пуле
+// acquireUpstreamConn() возвращает false и устанавливает 502.
+//
+// Сценарий: устанавливаем maxUpstreamConnectionsPerHost = 1, занимаем
+// единственный слот, второй вызов получает ErrDialTimeout.
+func TestAcquireUpstreamConnPoolFull(t *testing.T) {
+	restore := pool.SetMaxUpstreamConnectionsForTest(t, 1)
+	defer restore()
+
+	// Занимаем единственный слот (неважно, что dial не удастся — count всё равно
+	// инкрементится перед dial, а при ошибке декрементится).
+	// Используем testDialer-like подход — реальный listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, e := ln.Accept()
+			if e != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	conn1, err := pool.AcquireUpstreamConnection(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("unexpected dial error: %v", err)
+	}
+	if conn1 == nil {
+		t.Fatal("expected non-nil conn")
+	}
+
+	// Второй вызов — пул переполнен
+	var ctx fasthttp.RequestCtx
+	ctx.Init(&fasthttp.Request{}, nil, nil)
+
+	h := &handler{
+		ctx:             &ctx,
+		upstreamAddress: ln.Addr().String(),
+	}
+	ok := h.acquireUpstreamConn()
+	if ok {
+		t.Fatal("expected false when pool is full")
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+	if h.connection != nil {
+		t.Fatal("expected nil connection when pool is full")
+	}
+
+	pool.ReleaseUpstreamConnection(ln.Addr().String(), conn1)
+}
+
+// --- Подтип B: Dial timeout ---
+
+// TestAcquireUpstreamConnDialTimeout проверяет, что при таймауте dial-функции
+// acquireUpstreamConn() возвращает false и устанавливает 502.
+//
+// Сценарий: устанавливаем кастомную dial-функцию, которая блокируется на 100ms
+// и возвращает fasthttp.ErrDialTimeout.
+func TestAcquireUpstreamConnDialTimeout(t *testing.T) {
+	restore := pool.SetCustomDialForTest(t, func(addr string) (net.Conn, error) {
+		time.Sleep(100 * time.Millisecond)
+		return nil, fasthttp.ErrDialTimeout
+	})
+	defer restore()
+
+	addr := "127.0.0.1:1"
+
+	var ctx fasthttp.RequestCtx
+	ctx.Init(&fasthttp.Request{}, nil, nil)
+
+	h := &handler{
+		ctx:             &ctx,
+		upstreamAddress: addr,
+	}
+
+	start := time.Now()
+	ok := h.acquireUpstreamConn()
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Fatal("expected false on dial timeout")
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("expected dial to block for at least 100ms, got %v", elapsed)
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+	if h.connection != nil {
+		t.Fatal("expected nil connection on dial timeout")
+	}
+}
+
+// --- Комбинация: Pool full + Dial timeout ---
+
+// TestHandlerPoolFull проверяет, что при переполненном пуле через полный
+// цикл Handler прокси возвращает 502.
+//
+// Сценарий: устанавливаем кастомную dial-функцию, которая всегда успешна.
+// Заполняем пул через AcquireUpstreamConnection без Release для одного адреса,
+// затем вызываем Handler — acquireUpstreamConn получает ErrDialTimeout → 502.
+func TestHandlerPoolFull(t *testing.T) {
+	restore := pool.SetMaxUpstreamConnectionsForTest(t, 2)
+	defer restore()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, e := ln.Accept()
+			if e != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	addr := ln.Addr().String()
+
+	// Заполняем пул напрямую — 2 соединения для того же адреса,
+	// который будет использовать handler (с http:// префиксом).
+	poolAddr := "http://" + addr
+	var conns []net.Conn
+	for i := 0; i < 2; i++ {
+		c, err := pool.AcquireUpstreamConnection(poolAddr)
+		if err != nil {
+			t.Fatalf("unexpected dial error at %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+
+	// Третий — пул переполнен. Используем тот же адрес.
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(addr)
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{poolAddr})
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502 when pool full, got %d", ctx.Response.StatusCode())
+	}
+
+	// Освобождаем
+	for _, c := range conns {
+		pool.ReleaseUpstreamConnection(poolAddr, c)
+	}
+}
+
+// TestHandlerDialTimeout проверяет, что при таймауте dial-функции через
+// полный цикл Handler прокси возвращает 502.
+//
+// Сценарий: устанавливаем кастомную dial-функцию с таймаутом, вызываем Handler.
+func TestHandlerDialTimeout(t *testing.T) {
+	restore := pool.SetCustomDialForTest(t, func(addr string) (net.Conn, error) {
+		time.Sleep(50 * time.Millisecond)
+		return nil, fasthttp.ErrDialTimeout
+	})
+	defer restore()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("127.0.0.1:1")
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
 }

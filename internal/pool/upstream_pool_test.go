@@ -41,25 +41,6 @@ func testDialer(t *testing.T) (addr string, cleanup func()) {
 	return ln.Addr().String(), func() { ln.Close() }
 }
 
-// SetIdleTimeoutForTest устанавливает idleTimeout для тестов напрямую (без валидации)
-// и возвращает функцию восстановления исходного значения.
-// Использует прямое присваивание, чтобы тесты могли задавать sub-second значения.
-func SetIdleTimeoutForTest(t *testing.T, d time.Duration) func() {
-	t.Helper()
-	old := idleTimeout
-	idleTimeout = d
-	return func() { idleTimeout = old }
-}
-
-// SetMaxConnsForTest устанавливает maxUpstreamConnsPerHost для тестов
-// и возвращает функцию восстановления исходного значения.
-func SetMaxConnsForTest(t *testing.T, n int) func() {
-	t.Helper()
-	old := maxUpstreamConnectionsPerHost
-	maxUpstreamConnectionsPerHost = n
-	return func() { maxUpstreamConnectionsPerHost = old }
-}
-
 // errCloseConn — обёртка над net.Conn, у которой Close() всегда возвращает ошибку.
 type errCloseConn struct {
 	raw    net.Conn
@@ -423,7 +404,7 @@ func TestSetIdleTimeoutLongLived(t *testing.T) {
 // --- Тесты для SetMaxConnsPerHost ---
 
 func TestSetMaxConnsPerHostValid(t *testing.T) {
-	restore := SetMaxConnsForTest(t, 50)
+	restore := SetMaxUpstreamConnectionsForTest(t, 50)
 	defer restore()
 
 	addr, cleanup := testDialer(t)
@@ -448,7 +429,7 @@ func TestSetMaxConnsPerHostValid(t *testing.T) {
 }
 
 func TestSetMaxConnsPerHostMinimum(t *testing.T) {
-	restore := SetMaxConnsForTest(t, 100)
+	restore := SetMaxUpstreamConnectionsForTest(t, 100)
 	defer restore()
 
 	MaxConnectionsPerHost(1)
@@ -477,7 +458,7 @@ func TestSetMaxConnsPerHostMinimum(t *testing.T) {
 }
 
 func TestSetMaxConnsPerHostIsolated(t *testing.T) {
-	restore := SetMaxConnsForTest(t, 3)
+	restore := SetMaxUpstreamConnectionsForTest(t, 3)
 	defer restore()
 
 	addr1, cleanup1 := testDialer(t)
@@ -506,7 +487,7 @@ func TestSetMaxConnsPerHostIsolated(t *testing.T) {
 }
 
 func TestSetMaxConnsPerHostAfterPut(t *testing.T) {
-	restore := SetMaxConnsForTest(t, 2)
+	restore := SetMaxUpstreamConnectionsForTest(t, 2)
 	defer restore()
 
 	addr, cleanup := testDialer(t)
