@@ -56,7 +56,7 @@ func TestSetMaxConnsPerHostDefault(t *testing.T) {
 }
 
 func TestSetMaxConnsPerHostInvalid(t *testing.T) {
-	restore := SetMaxConnsForTest(t, 100)
+	restore := SetMaxUpstreamConnectionsForTest(t, 100)
 	defer restore()
 
 	MaxConnectionsPerHost(0)
