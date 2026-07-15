@@ -48,16 +48,18 @@ func TLSConfig(cfg *tls.Config) {
 
 // dial возвращает соединение, используя customDial или fasthttp.Dial по умолчанию.
 // addr может быть в формате "http://host:port" или "https://host:port".
+//
+//goland:noinspection GoResourceLeak
 func dial(addr string) (net.Conn, error) {
 	cleanAddr := parseUpstreamAddressForDial(addr)
 
-	if customDial != nil {
-		return customDial(cleanAddr)
-	}
-
 	// Определяем схему из адреса
 	if strings.HasPrefix(addr, config.PrefixHTTPS) && tlsConfig != nil {
-		// Для HTTPS используем fasthttp.Dial + TLS поверх
+		var (
+			conn net.Conn
+			err  error
+		)
+		// Для HTTPS используем fasthttp.Dial или fasthttpproxy.FasthttpHTTPDialerDualStackTimeout + TLS поверх
 		// Linter Warning:(61, 25) Potential resource leak: ensure the resource is closed on all execution paths
 		// Утечки нет. tls.Client — синхронная, безошибочная операция: она просто оборачивает conn в *tls.Conn и
 		// не выполняет handshake. Возвращённый tlsConn владеет базовым TCP-соединением.
@@ -66,7 +68,11 @@ func dial(addr string) (net.Conn, error) {
 		// — ложное срабатывание линтера.
 		// Линтер не видит, что tls.Client не имеет возврата ошибки и
 		// предполагает гипотетический сценарий отказа.
-		conn, err := fasthttp.Dial(cleanAddr)
+		if customDial != nil {
+			conn, err = customDial(cleanAddr)
+		} else {
+			conn, err = fasthttp.Dial(cleanAddr)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +80,11 @@ func dial(addr string) (net.Conn, error) {
 		return tlsConn, nil
 	}
 
-	return fasthttp.Dial(cleanAddr)
+	if customDial != nil {
+		return customDial(cleanAddr)
+	} else {
+		return fasthttp.Dial(cleanAddr)
+	}
 }
 
 // parseUpstreamAddressForDial извлекает чистый host:port из адреса со схемой.
