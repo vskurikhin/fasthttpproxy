@@ -25,7 +25,7 @@ func TestHandlerUpstreamCloseImmediate(t *testing.T) {
 	req.Header.SetHost(ln.Addr().String())
 	ctx.Init(&req, nil, nil)
 
-	handler := Handler(nil)
+	handler := Handler([]string{ln.Addr().String()})
 	handler(&ctx)
 
 	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
@@ -50,7 +50,7 @@ func TestHandlerUpstreamPartialHeaders(t *testing.T) {
 	req.Header.SetHost(ln.Addr().String())
 	ctx.Init(&req, nil, nil)
 
-	handler := Handler(nil)
+	handler := Handler([]string{ln.Addr().String()})
 	handler(&ctx)
 
 	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
@@ -78,7 +78,7 @@ func TestHandlerUpstreamContentLengthUnderread(t *testing.T) {
 	req.Header.SetHost(ln.Addr().String())
 	ctx.Init(&req, nil, nil)
 
-	handler := Handler(nil)
+	handler := Handler([]string{ln.Addr().String()})
 	handler(&ctx)
 
 	// handle() не должен упасть — body stream установлен корректно.
@@ -122,7 +122,7 @@ func TestHandlerUpstreamChunkedDisconnect(t *testing.T) {
 	req.Header.SetHost(ln.Addr().String())
 	ctx.Init(&req, nil, nil)
 
-	handler := Handler(nil)
+	handler := Handler([]string{ln.Addr().String()})
 	handler(&ctx)
 
 	// handle() не должен упасть — body stream установлен.
@@ -203,7 +203,7 @@ func TestNetworkFailures(t *testing.T) {
 			req.Header.SetHost(ln.Addr().String())
 			ctx.Init(&req, nil, nil)
 
-			handler := Handler(nil)
+			handler := Handler([]string{ln.Addr().String()})
 			handler(&ctx)
 
 			tt.verify(t, &ctx)

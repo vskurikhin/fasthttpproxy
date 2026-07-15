@@ -13,6 +13,11 @@ import (
 	"github.com/vskurikhin/fasthttpproxy/internal/config"
 )
 
+const (
+	SchemeHTTP  = "http"
+	SchemeHTTPS = "https"
+)
+
 // Upstream содержит информацию об upstream-сервере.
 type Upstream struct {
 	Address   string      // оригинальный адрес (например, "https://example.com:443")
@@ -70,7 +75,7 @@ func (u *Upstreams) Append(address string) {
 	if err != nil {
 		up := &Upstream{
 			Address: address,
-			Scheme:  "http",
+			Scheme:  SchemeHTTP,
 		}
 		u.m[address] = up
 		u.keys = append(u.keys, up)
@@ -85,8 +90,8 @@ func (u *Upstreams) Append(address string) {
 // Если схема не указана, используется "http".
 func ParseAddress(addr string) (*Upstream, error) {
 	// Добавляем схему по умолчанию, если её нет
-	if !strings.HasPrefix(addr, "http://") && !strings.HasPrefix(addr, "https://") {
-		addr = "http://" + addr
+	if !strings.HasPrefix(addr, config.PrefixHTTP) && !strings.HasPrefix(addr, config.PrefixHTTPS) {
+		addr = config.PrefixHTTP + addr
 	}
 
 	u, err := url.Parse(addr)
@@ -100,7 +105,7 @@ func ParseAddress(addr string) (*Upstream, error) {
 
 	if port == "" {
 		switch scheme {
-		case "https":
+		case SchemeHTTPS:
 			port = "443"
 		default:
 			port = "80"
