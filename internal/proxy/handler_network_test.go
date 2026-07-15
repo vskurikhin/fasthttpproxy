@@ -237,6 +237,141 @@ func TestHandlerUpstreamChunkedDisconnect(t *testing.T) {
 	}
 }
 
+// --- Подтип B: Invalid chunk size ---
+
+// TestHandlerChunkedInvalidSize проверяет, что при неверном hex-размере чанка
+// (GG вместо hex) fasthttp не падает и корректно обрабатывает ошибку.
+//
+// Сценарий: upstream отправляет chunked-заголовок, затем "GG\r\nhello\r\n0\r\n\r\n".
+// fasthttp не может распарсить GG как hex-размер → ошибка декодинга chunked.
+func TestHandlerChunkedInvalidSize(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultChunkedInvalidSize)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// fasthttp может вернуть 502 при ошибке декодинга chunked
+	t.Logf("status: %d, body length: %d", ctx.Response.StatusCode(), len(ctx.Response.Body()))
+}
+
+// --- Подтип C: Broken trailer ---
+
+// TestHandlerChunkedBrokenTrailer проверяет, что при мусоре после 0\r\n
+// (broken trailer) fasthttp не падает и корректно обрабатывает ошибку.
+//
+// Сценарий: upstream отправляет chunked-заголовок, чанк "hello", 0\r\n, затем
+// "GARBAGE\r\n". fasthttp получает мусор после терминатора → ошибка trailer.
+func TestHandlerChunkedBrokenTrailer(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultChunkedBrokenTrailer)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// fasthttp может вернуть 502 при ошибке trailer
+	t.Logf("status: %d, body length: %d", ctx.Response.StatusCode(), len(ctx.Response.Body()))
+}
+
+// --- Табличный тест для chunked encoding errors ---
+
+func TestChunkedEncodingErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		fault  FaultType
+		verify func(*testing.T, *fasthttp.RequestCtx)
+	}{
+		{
+			name:  "missing_terminator",
+			fault: FaultChunkedDisconnect,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+			},
+		},
+		{
+			name:  "invalid_chunk_size",
+			fault: FaultChunkedInvalidSize,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+			},
+		},
+		{
+			name:  "broken_trailer",
+			fault: FaultChunkedBrokenTrailer,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ResetUpstreams()
+			ln := startFaultyUpstream(t, tt.fault)
+			defer ln.Close()
+
+			var ctx fasthttp.RequestCtx
+			var req fasthttp.Request
+			req.Header.SetMethod("GET")
+			req.SetRequestURI("/")
+			req.Header.SetHost(ln.Addr().String())
+			ctx.Init(&req, nil, nil)
+
+			handler := Handler([]string{ln.Addr().String()})
+			handler(&ctx)
+
+			tt.verify(t, &ctx)
+		})
+	}
+}
+
 // --- Табличный тест для всех сценариев ---
 
 func TestNetworkFailures(t *testing.T) {
@@ -282,6 +417,30 @@ func TestNetworkFailures(t *testing.T) {
 			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
 				if !ctx.Response.IsBodyStream() {
 					t.Fatal("expected body stream")
+				}
+			},
+		},
+		{
+			name:  "chunked_invalid_size",
+			fault: FaultChunkedInvalidSize,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
+				}
+			},
+		},
+		{
+			name:  "chunked_broken_trailer",
+			fault: FaultChunkedBrokenTrailer,
+			verify: func(t *testing.T, ctx *fasthttp.RequestCtx) {
+				if !ctx.Response.IsBodyStream() {
+					t.Fatal("expected body stream")
+				}
+				if !ctx.Response.ImmediateHeaderFlush {
+					t.Fatal("expected ImmediateHeaderFlush")
 				}
 			},
 		},

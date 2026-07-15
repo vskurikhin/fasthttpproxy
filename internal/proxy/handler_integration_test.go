@@ -174,6 +174,68 @@ func TestIntegrationContentLengthUnderreadSevere(t *testing.T) {
 	}
 }
 
+// TestIntegrationChunkedInvalidSize проверяет, что при неверном hex-размере
+// чанка (GG) через полный цикл Handler прокси не падает и корректно
+// устанавливает body stream.
+//
+// Подтип B: upstream отправляет "GG\r\n" как размер чанка.
+func TestIntegrationChunkedInvalidSize(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultChunkedInvalidSize)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	t.Logf("status: %d, body length: %d", ctx.Response.StatusCode(), len(ctx.Response.Body()))
+}
+
+// TestIntegrationChunkedBrokenTrailer проверяет, что при мусоре после 0\r\n
+// (broken trailer) через полный цикл Handler прокси не падает и корректно
+// устанавливает body stream.
+//
+// Подтип C: upstream отправляет "GARBAGE\r\n" после терминатора.
+func TestIntegrationChunkedBrokenTrailer(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultChunkedBrokenTrailer)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	t.Logf("status: %d, body length: %d", ctx.Response.StatusCode(), len(ctx.Response.Body()))
+}
+
 // TestIntegrationUpstreamChunkedDisconnect проверяет, что при chunked-ответе
 // без терминатора прокси корректно устанавливает body stream и не падает.
 //
