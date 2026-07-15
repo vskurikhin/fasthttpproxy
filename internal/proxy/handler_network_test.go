@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"io"
 	"testing"
 
 	"github.com/valyala/fasthttp"
@@ -209,4 +210,117 @@ func TestNetworkFailures(t *testing.T) {
 			tt.verify(t, &ctx)
 		})
 	}
+}
+
+// --- Подтип A: Client disconnect during request body ---
+
+// TestHandlerClientDisconnectRequestBody проверяет, что при ошибке чтения
+// клиентского body stream (симуляция обрыва клиента во время POST) прокси
+// возвращает 502 Bad Gateway.
+//
+// Сценарий: клиент начал отправлять тело POST-запроса, но оборвал соединение.
+// BodyStream() возвращает ошибку при Read() → PipeCopy возвращает ошибку →
+// writeRequestBody() возвращает false → handle() вызывает CloseAndDrop → 502.
+func TestHandlerClientDisconnectRequestBody(t *testing.T) {
+	mc := newMockConn()
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("POST")
+	req.SetRequestURI("/")
+	req.Header.SetHost("example.com")
+	ctx.Init(&req, nil, nil)
+	// Body stream, который возвращает ошибку при первом Read — симуляция обрыва клиента
+	ctx.Request.SetBodyStream(&errReader{err: io.ErrUnexpectedEOF}, -1)
+
+	h := &handler{
+		ctx:        &ctx,
+		connection: mc,
+	}
+
+	ok := h.writeRequestBody()
+	if ok {
+		t.Fatal("expected false when client body stream fails")
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// --- Подтип B1: Client disconnect during Content-Length response ---
+
+// TestHandlerClientDisconnectResponseContentLength проверяет, что при обрыве
+// клиента во время стриминга ответа с Content-Length прокси корректно
+// устанавливает body stream. Соединение upstream в итоге возвращается в пул
+// (readWithLimit дочитывает до remain).
+//
+// Сценарий: upstream отправляет 200 OK + Content-Length: 1000 + 500 байт тела.
+// Клиент обрывает после handle() — fasthttp перестаёт читать из PoolReader.
+// PoolReader продолжает чтение до remain=0 и возвращает соединение в пул.
+func TestHandlerClientDisconnectResponseContentLength(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyClientUpstream(t, FaultClientDisconnectResponseContentLength)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен корректно
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Читаем тело — PoolReader дочитывает до remain=0 и возвращает соединение в пул
+	body := ctx.Response.Body()
+	if len(body) == 0 {
+		t.Fatal("expected non-empty body")
+	}
+	if len(body) > 500 {
+		t.Fatalf("expected body <= 500 bytes (partial read), got %d", len(body))
+	}
+}
+
+// --- Подтип B2: Client disconnect during chunked response ---
+
+// TestHandlerClientDisconnectResponseChunked проверяет, что при обрыве клиента
+// во время стриминга chunked-ответа прокси корректно устанавливает body stream.
+// Соединение upstream закрывается (readUntilEOF получает EOF → CloseAndDrop).
+//
+// Сценарий: upstream отправляет chunked-заголовок, один чанк, и закрывает без
+// 0\r\n\r\n. Клиент обрывает — fasthttp перестаёт читать.
+func TestHandlerClientDisconnectResponseChunked(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyClientUpstream(t, FaultClientDisconnectResponseChunked)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Пытаемся прочитать тело — может быть пустым, если fasthttp отбросил неполный чанк
+	body := ctx.Response.Body()
+	_ = body // может быть пустым — это допустимо для неполного chunked
 }

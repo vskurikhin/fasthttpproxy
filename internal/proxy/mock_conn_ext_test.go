@@ -43,6 +43,14 @@ func (w *resetWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// errReader — reader, который всегда возвращает ошибку при Read.
+type errReader struct {
+	io.Reader
+	err error
+}
+
+func (r *errReader) Read(p []byte) (int, error) { return 0, r.err }
+
 // closeTrackConn — net.Conn, которая отслеживает вызов Close.
 type closeTrackConn struct {
 	net.Conn
