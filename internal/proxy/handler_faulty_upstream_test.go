@@ -2,12 +2,114 @@ package proxy
 
 import (
 	"bufio"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
+
+// generateSelfSignedCert создаёт самоподписанный сертификат и ключ для заданного CN.
+// Возвращает сертификат и ключ в PEM-формате, пригодные для tls.X509KeyPair.
+func generateSelfSignedCert(t *testing.T, cn string) (certPEM, keyPEM []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate RSA key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyBytes := x509.MarshalPKCS1PrivateKey(key)
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyBytes})
+	return certPEM, keyPEM
+}
+
+// startTLSServer запускает TLS-сервер с самоподписанным сертификатом для CN=127.0.0.1.
+// После принятия соединения читает запрос и отправляет предопределённый ответ.
+func startTLSServer(t *testing.T, response string) net.Listener {
+	t.Helper()
+	certPEM, keyPEM := generateSelfSignedCert(t, "127.0.0.1")
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("failed to load key pair: %v", err)
+	}
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientAuth:   tls.NoClientCert,
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	if err != nil {
+		t.Fatalf("tls listen: %v", err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				req := fasthttp.AcquireRequest()
+				_ = req.Read(br)
+				fasthttp.ReleaseRequest(req)
+				bw := bufio.NewWriter(c)
+				_, _ = bw.WriteString(response)
+				_ = bw.Flush()
+			}(conn)
+		}
+	}()
+	return ln
+}
+
+// startPlainTCPServer запускает обычный TCP-сервер, который отвечает предопределённым ответом.
+// Используется для тестов, где прокси пытается подключиться по HTTPS к HTTP-серверу.
+func startPlainTCPServer(t *testing.T, response string) (net.Listener, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				req := fasthttp.AcquireRequest()
+				_ = req.Read(br)
+				fasthttp.ReleaseRequest(req)
+				bw := bufio.NewWriter(c)
+				_, _ = bw.WriteString(response)
+				_ = bw.Flush()
+			}(conn)
+		}
+	}()
+	return ln, func() { ln.Close() }
+}
 
 // FaultType определяет тип сбоя для startFaultyUpstream.
 type FaultType int

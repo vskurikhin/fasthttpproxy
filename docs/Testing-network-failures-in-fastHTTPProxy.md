@@ -418,6 +418,6 @@ if details:
 1. [x] **Upstream disconnect mid-response** — самый частый сбой в production
 2. [x] **Client disconnect during streaming** — прокси должен корректно завершить upstream
 3. [x] **Dial timeout with pool full** — комбинация двух условий
-4. [ ] **TLS handshake failure** — если используется HTTPS upstream
+4. [x] **TLS handshake failure** — если используется HTTPS upstream
 5. [ ] **Content-Length under-read** — upstream не досылает обещанное количество байт
 6. [ ] **Chunked encoding error** — upstream присылает некорректный chunked trailer
