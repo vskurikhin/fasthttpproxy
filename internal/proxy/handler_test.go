@@ -960,6 +960,132 @@ func TestChunkedConnectionClosed(t *testing.T) {
 	}
 }
 
+// --- Интеграционные тесты: Upstream disconnect mid-response ---
+
+// TestIntegrationUpstreamCloseImmediate проверяет, что при закрытии upstream
+// без отправки данных через полный цикл Handler прокси возвращает 502.
+//
+// Сценарий: upstream принимает соединение и сразу закрывает.
+// Handler → handle() → readResponseHeaders получает io.EOF → 502.
+func TestIntegrationUpstreamCloseImmediate(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultCloseImmediate)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestIntegrationUpstreamPartialHeaders проверяет, что при частичном заголовке
+// ответа upstream через полный цикл Handler прокси возвращает 502.
+//
+// Сценарий: upstream отправляет "HTTP/1.1 200 OK\r\n" и закрывает.
+// readResponseHeaders получает неполный заголовок → ошибка → 502.
+func TestIntegrationUpstreamPartialHeaders(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultPartialHeaders)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestIntegrationUpstreamContentLengthUnderread проверяет поведение прокси при
+// неполном теле ответа upstream: заголовки с Content-Length: 100, но только
+// 50 байт тела, затем закрытие.
+//
+// Сценарий B1: заголовки прочитаны успешно, тело неполное.
+// handle() устанавливает body stream; PoolReader.readWithLimit получает EOF
+// при remain=50 → ошибка. Статус остаётся 200 (заголовки уже скопированы).
+func TestIntegrationUpstreamContentLengthUnderread(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultContentLengthUnderread)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен корректно.
+	// Статус 200 — заголовки скопированы до чтения тела.
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Читаем тело — должно быть меньше 100 байт
+	body := ctx.Response.Body()
+	if len(body) >= 100 {
+		t.Fatalf("expected body < 100 bytes due to underread, got %d", len(body))
+	}
+	if len(body) == 0 {
+		t.Fatal("expected some body bytes")
+	}
+}
+
+// TestIntegrationUpstreamChunkedDisconnect проверяет, что при chunked-ответе
+// без терминатора прокси корректно устанавливает body stream и не падает.
+//
+// Сценарий B2: upstream отправляет chunked-заголовок, один чанк, и закрывает
+// без 0\r\n\r\n. PoolReader.readUntilEOF получает EOF → CloseAndDrop.
+func TestIntegrationUpstreamChunkedDisconnect(t *testing.T) {
+	ResetUpstreams()
+	ln := startFaultyUpstream(t, FaultChunkedDisconnect)
+	defer ln.Close()
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost(ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler([]string{ln.Addr().String()})
+	handler(&ctx)
+
+	// handle() не должен упасть — body stream установлен
+	if !ctx.Response.IsBodyStream() {
+		t.Fatal("expected body stream")
+	}
+	if !ctx.Response.ImmediateHeaderFlush {
+		t.Fatal("expected ImmediateHeaderFlush")
+	}
+
+	// Пытаемся прочитать тело — fasthttp может отбросить неполный chunked-чанк
+	body := ctx.Response.Body()
+	_ = body // может быть пустым — допустимо для неполного chunked
+}
+
 // --- Тест copyResponseStatus с пустым respHeader ---
 
 func TestCopyResponseStatusNilHeader(t *testing.T) {
