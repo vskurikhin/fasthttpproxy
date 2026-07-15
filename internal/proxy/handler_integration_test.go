@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"crypto/tls"
 	"io"
 	"net"
 	"testing"
@@ -328,6 +329,120 @@ func TestIntegrationDialTimeout(t *testing.T) {
 
 	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// --- Интеграционные тесты: TLS handshake failure ---
+
+// TestIntegrationTLSHandshakeFailure проверяет, что при подключении прокси по
+// HTTPS к обычному TCP-серверу (без TLS) возникает ошибка handshake → 502.
+//
+// Сценарий: upstream — plain TCP, прокси использует https:// адрес с tlsConfig.
+// TLS handshake при flush() падает → writeRequestHeaders → false → 502.
+func TestIntegrationTLSHandshakeFailure(t *testing.T) {
+	ln, cleanup := startPlainTCPServer(t, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nhello!")
+	defer cleanup()
+
+	// Настраиваем TLS-конфиг (сервер не поддерживает TLS — handshake упадёт)
+	pool.TLSConfig(&tls.Config{InsecureSkipVerify: true, ServerName: "127.0.0.1"})
+	defer pool.TLSConfig(nil)
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("https://" + ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestIntegrationTLSInvalidCertificate проверяет, что при подключении к
+// TLS-серверу с самоподписанным сертификатом и InsecureSkipVerify=false
+// прокси возвращает 502.
+//
+// Сценарий: TLS-сервер с самоподписанным сертификатом, tlsConfig без
+// InsecureSkipVerify. TLS handshake завершается ошибкой проверки сертификата.
+func TestIntegrationTLSInvalidCertificate(t *testing.T) {
+	ln := startTLSServer(t, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nhello!")
+	defer ln.Close()
+
+	// TLS-конфиг без InsecureSkipVerify — самоподписанный сертификат вызовет ошибку
+	pool.TLSConfig(&tls.Config{ServerName: "127.0.0.1"})
+	defer pool.TLSConfig(nil)
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("https://" + ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestIntegrationTLSInsecureSkipVerifySuccess проверяет, что при подключении к
+// TLS-серверу с самоподписанным сертификатом и InsecureSkipVerify=true
+// прокси успешно проксирует запрос (200 OK).
+//
+// Сценарий: TLS-сервер с самоподписанным сертификатом, tlsConfig с
+// InsecureSkipVerify=true. Handshake проходит, запрос проксируется успешно.
+func TestIntegrationTLSInsecureSkipVerifySuccess(t *testing.T) {
+	ln := startTLSServer(t, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nhello!")
+	defer ln.Close()
+
+	pool.TLSConfig(&tls.Config{InsecureSkipVerify: true, ServerName: "127.0.0.1"})
+	defer pool.TLSConfig(nil)
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("https://" + ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected 200 with InsecureSkipVerify, got %d", ctx.Response.StatusCode())
+	}
+}
+
+// TestIntegrationTLSValidCertificate проверяет, что при подключении к
+// TLS-серверу с валидным сертификатом (самоподписанный, но InsecureSkipVerify=true)
+// прокси успешно проксирует запрос (200 OK).
+//
+// Сценарий: TLS-сервер с самоподписанным сертификатом, InsecureSkipVerify=true.
+func TestIntegrationTLSValidCertificate(t *testing.T) {
+	ln := startTLSServer(t, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nhello!")
+	defer ln.Close()
+
+	pool.TLSConfig(&tls.Config{InsecureSkipVerify: true, ServerName: "127.0.0.1"})
+	defer pool.TLSConfig(nil)
+
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("https://" + ln.Addr().String())
+	ctx.Init(&req, nil, nil)
+
+	handler := Handler(nil)
+	handler(&ctx)
+
+	if ctx.Response.StatusCode() != fasthttp.StatusOK {
+		t.Fatalf("expected 200, got %d", ctx.Response.StatusCode())
 	}
 }
 

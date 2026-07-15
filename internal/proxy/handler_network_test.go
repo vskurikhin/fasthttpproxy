@@ -515,3 +515,36 @@ func TestHandlerDialTimeout(t *testing.T) {
 		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
 	}
 }
+
+// --- TLS handshake failure ---
+
+// TestHandlerTLSHandshakeFailure проверяет, что при ошибке, похожей на TLS
+// handshake failure во время writeRequestHeaders, прокси возвращает 502.
+//
+// Сценарий: mock-соединение, writer которого возвращает ошибку при первой
+// записи (симуляция tls.Conn.Write, где handshake падает).
+// writeRequestHeaders() → bw.Flush() → conn.Write() → ошибка → 502.
+func TestHandlerTLSHandshakeFailure(t *testing.T) {
+	mc := newMockConn()
+	mc.writer = &errWriter{err: io.ErrClosedPipe}
+	var ctx fasthttp.RequestCtx
+	var req fasthttp.Request
+	req.Header.SetMethod("GET")
+	req.SetRequestURI("/")
+	req.Header.SetHost("example.com")
+	ctx.Init(&req, nil, nil)
+
+	h := &handler{
+		ctx:        &ctx,
+		connection: mc,
+		request:    &req,
+	}
+
+	ok := h.writeRequestHeaders()
+	if ok {
+		t.Fatal("expected false on TLS handshake failure")
+	}
+	if ctx.Response.StatusCode() != fasthttp.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", ctx.Response.StatusCode())
+	}
+}
